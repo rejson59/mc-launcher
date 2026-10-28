@@ -2,7 +2,7 @@ name: Deploy na GitHub Pages
 
 on:
   push:
-    branches: [arena/5dfdf7fc-mc-launcher, main]
+    branches: [arena/0b37d8ae-mc-launcher, main]
   workflow_dispatch:
 
 permissions:
