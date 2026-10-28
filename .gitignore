@@ -1,0 +1,10 @@
+# Duże pliki binarne (APK/AAB i rozłożone części) – obecne w katalogu roboczym,
+# ale nie trafiają do gita (limit GitHuba i rozmiar patchy).
+mojo-apk/
+
+# Środowisko / artefakty
+node_modules/
+__pycache__/
+*.pyc
+.cache/
+tmp/

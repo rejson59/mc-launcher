@@ -1,0 +1,60 @@
+name: Deploy na GitHub Pages
+
+on:
+  push:
+    branches: [arena/5dfdf7fc-mc-launcher, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  deployments: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Otwarcie polityki gałęzi środowiska github-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Środowisko Pages ma "selected branches" – bez naszej gałęzi deploy
+          # jest odrzucany w 1 s. Próbujemy dopisać się (GITHUB_TOKEN = inna
+          # klasa uprawnień niż token z zewnątrz); jeśli się nie uda, krok
+          # kończy się powodzeniem, a winę zobaczymy w deployu.
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/environments/github-pages" \
+            --input - <<'EOF' || echo "::warning::Nie udało się zmienić polityki – dodaj gałąź ręcznie w Settings→Environments→github-pages"
+          {"deployment_branch_policy":{"custom_branch_policies":true,"selected_branches":["${{ github.ref_name }}"]}}
+          EOF
+          gh api "repos/${GITHUB_REPOSITORY}/environments/github-pages" --jq '{policy: .deployment_branch_policy}' || true
+      - name: Składanie drzewa strony (bez binariów analizy)
+        run: |
+          mkdir -p _site
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'mojo-apk' \
+            --exclude 'node_modules' \
+            --exclude 'test' \
+            --exclude '_site' \
+            ./ _site/
+          du -sh _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
