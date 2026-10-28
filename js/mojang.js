@@ -84,9 +84,8 @@ export async function getVersionJson(id) {
   const key = `/app/data/vanilla/${id}/version.json`;
   const hit = await cache.match(key);
   if (hit) return hit.json();
-  const r = await fetch(entry.url, { cache: "force-cache" });
-  if (!r.ok) throw new Error("version.json: HTTP " + r.status);
-  const data = await r.json();
+  const vbytes = await robustFetch(entry.url, { sha1: entry.sha1 });
+  const data = JSON.parse(new TextDecoder().decode(vbytes));
   await cache.put(key, new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } }));
   return data;
 }
@@ -171,6 +170,71 @@ function md5Hex(bytes) {
   return `${h(0, 4)}-${h(4, 2)}-${h(6, 2)}-${h(8, 2)}-${h(10, 6)}`;
 }
 
+/* ---------------- pobieranie odporne (lustra + proxy CORS) ---------------- */
+
+/**
+ * Kolejka źródeł pliku: oryginał (https), lustro Maven Central (jeśli ścieżka
+ * mavenowa), mirror BMCLAPI, a na końcu publiczne proxy dodające CORS.
+ * libraries.minecraft.net bywa nieosiągalny z przeglądarki (CORS/sieć) —
+ * wtedy ratują proxy, a SHA-1 z manifestu gwarantuje identyczność bajtów.
+ */
+function fetchCandidates(rawUrl) {
+  let u;
+  try {
+    u = new URL(rawUrl, location.href);
+    if (u.protocol === "http:") u.protocol = "https:"; // mixed content na HTTPS
+  } catch {
+    return [String(rawUrl)]; // URL względny – bez kandydatów zewnętrznych
+  }
+  const origin = u.toString();
+  const list = [origin];
+  if (u.hostname === "libraries.minecraft.net") {
+    const path = u.pathname.replace(/^\//, "");
+    list.push("https://repo1.maven.org/maven2/" + path);
+    list.push("https://bmclapi2.bangbang93.com/maven/" + path);
+  }
+  list.push(
+    "https://api.allorigins.win/raw?url=" + encodeURIComponent(origin),
+    "https://corsproxy.io/?url=" + encodeURIComponent(origin),
+    "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(origin),
+  );
+  return list;
+}
+
+/**
+ * Pobranie bajtów z łańcuchem fallbacku: po 2 próby na źródło (błąd sieci
+ * = powtórka), HTTP 4xx/5xx lub zły SHA-1 = natychmiast następne źródło.
+ * Abort propaguje się od razu. Zwraca Uint8Array gotowy do Cache Storage.
+ */
+export async function robustFetch(rawUrl, { signal, sha1 } = {}) {
+  const label = (() => {
+    try { return new URL(rawUrl, location.href).host; } catch { return "?"; }
+  })();
+  let last = null;
+  for (const url of fetchCandidates(rawUrl)) {
+    const tag = (() => {
+      try { return new URL(url).host; } catch { return "?"; }
+    })();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const r = await fetch(url, { signal, cache: "no-store" });
+        if (!r.ok) { last = new Error(`HTTP ${r.status} (${tag})`); break; }
+        const body = new Uint8Array(await r.arrayBuffer());
+        if (sha1) {
+          const got = await sha1Hex(body);
+          if (got !== sha1) { last = new Error(`SHA-1 nie zgadza się (${tag})`); break; }
+        }
+        if (tag !== label) console.debug("robustFetch", label, "←", tag);
+        return body;
+      } catch (e) {
+        if (e?.name === "AbortError") throw e;
+        last = e;
+      }
+    }
+  }
+  throw new Error(`${label}: ${last?.message || "nie udało się pobrać"}`);
+}
+
 /* ---------------- plan startu ---------------- */
 
 /** Rozwiązuje reguły/biblioteki/assety – czyste dane do instalacji i startu. */
@@ -242,9 +306,7 @@ export async function installInstance(id, { signal, onProgress } = {}) {
   for (const lib of plan.libs) addJob(`${base}/libraries/${lib.path}`, lib.url, lib.sha1, lib.size, "biblioteki");
 
   // asset index najpierw (weryfikowany od razu), bo dopiero on znamy obiekty
-  const idxResp = await fetch(plan.assetIndex.url, { signal });
-  if (!idxResp.ok) throw new Error("assetIndex HTTP " + idxResp.status);
-  const idxBody = new Uint8Array(await idxResp.arrayBuffer());
+  const idxBody = await robustFetch(plan.assetIndex.url, { signal, sha1: plan.assetIndex.sha1 });
   state.bytes += await cachePut(cache, `${base}/assets/indexes/${plan.assetIndex.id}.json`,
     idxBody, plan.assetIndex.sha1);
   state.done++;
@@ -279,9 +341,7 @@ export async function installInstance(id, { signal, onProgress } = {}) {
             continue;
           }
         }
-        const r = await fetch(j.url, { signal });
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        const body = await r.arrayBuffer();
+        const body = await robustFetch(j.url, { signal, sha1: j.sha1 });
         state.bytes += await cachePut(cache, j.key, body, j.sha1);
         state.done++;
         report(j.phase, state.done, total, state.bytes);
