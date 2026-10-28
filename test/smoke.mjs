@@ -172,6 +172,35 @@ check("netshim: socketRead0 obecny", typeof n.Java_java_net_SocketInputStream_so
 check("netshim: connect0 obecny", typeof n.Java_sun_nio_ch_Net_connect0 === "function");
 check("netshim: epoll_wait obecny", typeof n.Java_sun_nio_ch_EPoll_epoll_wait === "function");
 
+/* ---- robustFetch: łańcuch źródeł + weryfikacja SHA-1 ---- */
+{
+  const savedFetch = globalThis.fetch;
+  const data = new TextEncoder().encode("lustrzane-bajty");
+  const want = [...new Uint8Array(await crypto.subtle.digest("SHA-1", data))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  // oryginał pada (404), repo1.maven.org żyje → fallback do lustra
+  globalThis.fetch = async (input) => {
+    const u = String(input?.url || input);
+    if (u.includes("repo1.maven.org")) return new Response(data, { status: 200 });
+    return new Response("", { status: 404 });
+  };
+  const got = await mojang.robustFetch(
+    "https://libraries.minecraft.net/com/mojang/netty/1.8.8/netty-1.8.8.jar", { sha1: want });
+  check("robustFetch: 404 z oryginału → lustro repo1.maven.org",
+    got.length === data.length && got.every((b, i) => b === data[i]));
+
+  // wszędzie złe bajty → odrzucone po SHA-1, błąd z nazwą hosta
+  globalThis.fetch = async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+  let err = null;
+  try { await mojang.robustFetch("https://libraries.minecraft.net/x.jar", { sha1: want }); }
+  catch (e) { err = e; }
+  check("robustFetch: zły SHA-1 we wszystkich źródłach → czytelny błąd",
+    !!err && /SHA-1/.test(err.message) && /libraries\.minecraft\.net/.test(err.message));
+
+  globalThis.fetch = savedFetch;
+}
+
 console.log(failures.length ? `\n${failures.length} BŁĘD(Y)` : "\nWSZYSTKO OK");
 void realFetch;
 process.exit(failures.length ? 1 : 0);
