@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MC Launcher Web – oryginalny Minecraft w przeglądarce</title>
+<meta name="description" content="Launcher inspirowany MojoLauncher: oryginalny Minecraft Java Edition uruchamiany w przeglądarce, z trybem AutoRAM dla słabszych maszyn.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%236b4a2f'/><rect x='1' y='1' width='14' height='14' fill='%235d8f3c'/><rect x='1' y='1' width='14' height='4' fill='%237ab945'/></svg>">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="crt" aria-hidden="true"></div>
+
+<div id="shell">
+  <header id="topbar">
+    <a class="brand" href="#/home">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="2" y="10" width="28" height="20" fill="#6b4a2f"/>
+        <rect x="2" y="6" width="28" height="8" fill="#5d8f3c"/>
+        <rect x="2" y="6" width="28" height="3" fill="#7ab945"/>
+        <rect x="6" y="14" width="5" height="5" fill="#5a3d26"/>
+        <rect x="18" y="18" width="6" height="4" fill="#5a3d26"/>
+        <rect x="12" y="22" width="4" height="4" fill="#7a5b3a"/>
+      </svg>
+      <span class="brand-name">MC&nbsp;LAUNCHER<em>web</em></span>
+    </a>
+    <nav id="mainnav">
+      <a href="#/home" data-nav="home">Start</a>
+      <a href="#/instances" data-nav="instances">Instancje</a>
+      <a href="#/java" data-nav="java">Java args</a>
+      <a href="#/settings" data-nav="settings">Ustawienia</a>
+      <a href="#/about" data-nav="about">O projekcie</a>
+    </nav>
+    <button id="profile-chip" type="button" title="Profil gracza">
+      <span id="profile-face" class="face"></span>
+      <span id="profile-name">Gracz</span>
+    </button>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+
+  <footer id="statusbar">
+    <span id="sb-ram">AutoRAM: …</span>
+    <span id="sb-renderer">Renderer: …</span>
+    <span id="sb-bufor">Bufor: –</span>
+    <span class="grow"></span>
+    <span id="sb-version">mc-launcher web · na podstawie analizy MojoLauncher</span>
+  </footer>
+</div>
+
+<!-- Ekran gry -->
+<div id="gameview" hidden>
+  <div id="game-wrap">
+    <div id="game-scale">
+      <iframe id="game-frame" title="Minecraft" allow="pointer-lock; fullscreen; autoplay"></iframe>
+    </div>
+    <div id="hud">
+      <span id="hud-name"></span>
+      <span id="hud-fps">FPS –</span>
+      <span id="hud-heap">RAM –</span>
+      <span id="hud-bufor">bufor –</span>
+      <span class="grow"></span>
+      <button id="hud-full" type="button" title="Pełny ekran">⛶</button>
+      <button id="hud-exit" type="button">Wyjdź</button>
+    </div>
+    <div id="touch-pad" hidden>
+      <div class="tp-dpad">
+        <button class="tp tp-up"    data-key="KeyW" data-k="w">▲</button>
+        <button class="tp tp-left"  data-key="KeyA" data-k="a">◀</button>
+        <button class="tp tp-right" data-key="KeyD" data-k="d">▶</button>
+        <button class="tp tp-down"  data-key="KeyS" data-k="s">▼</button>
+      </div>
+      <div class="tp-actions">
+        <button class="tp tp-big" data-key="Space" data-k=" ">SKOK</button>
+        <button class="tp" data-key="ShiftLeft" data-k="shift">SKRAD</button>
+        <button class="tp" data-key="KeyE" data-k="e">E</button>
+        <button class="tp" data-key="Escape" data-k="escape">ESC</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal instalacji -->
+<div id="modal" hidden>
+  <div class="modal-card">
+    <h3 id="modal-title">Instalacja instancji</h3>
+    <div id="modal-body">
+      <div class="pbar"><div id="modal-fill"></div></div>
+      <p id="modal-status">Przygotowywanie…</p>
+      <pre id="modal-log" aria-hidden="true"></pre>
+    </div>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="btn ghost" type="button">Anuluj</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-stack" aria-live="polite"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
