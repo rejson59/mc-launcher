@@ -1,159 +1,67 @@
 /**
- * sw.js – serwer instancji gry.
- *
- * Mapuje /rt/<instId>/<ścieżka> na Cache Storage instancji.
- * Pudło (pierwsze uruchomienie / leniwe pliki) → pobranie z mirrorów
- * GitHuba (raw.githubusercontent → jsdelivr), z wymuszeniem poprawnego
- * Content-Type i opcjonalnym spławianiem ścieżek absolutnych (/app, /build).
- * Wszystko serwowane jest z originu launchera – gra myśli, że jest offline.
+ * sw.js – skromny Service Worker: powłoka aplikacji do offline + stary
+ * porządek czyszczony. Pliki gry CheerpJ-owi serwuje hook `fetch`
+ * z js/game.js prosto z Cache Storage (z obsługą Range), więc tutaj
+ * NIC nie ruszamy dla /app/data/* (przepuszczenie = serwer/strona robi swoje).
  */
+const SHELL = "mcl-shell-v2";
 
-const CACHE_PREFIX = "mcw-inst-";
-const META_KEY = "__meta.json";
-
-const MIME = {
-  html: "text/html; charset=utf-8",
-  htm: "text/html; charset=utf-8",
-  js: "text/javascript; charset=utf-8",
-  mjs: "text/javascript; charset=utf-8",
-  json: "application/json; charset=utf-8",
-  css: "text/css; charset=utf-8",
-  wasm: "application/wasm",
-  epk: "application/octet-stream",
-  epw: "application/octet-stream",
-  map: "application/json",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  ogg: "audio/ogg",
-  txt: "text/plain; charset=utf-8",
-  lang: "text/plain; charset=utf-8",
-};
-
-function contentTypeFor(path) {
-  const ext = (path.split(".").pop() || "").toLowerCase();
-  return MIME[ext] || "application/octet-stream";
-}
-
-function patchText(relPath, text) {
-  if (!/\.(html?|js|json)$/i.test(relPath)) return text;
-  const allow = relPath === "index.html" || /^app\/[^/]+\.js$/.test(relPath)
-    || relPath === "build/manifest.json";
-  if (!allow) return text;
-  return text.replace(/(["'(])\/(app|build)\//g, "$1$2/");
-}
-
-function encPath(rel) {
-  return rel.split("/").map(encodeURIComponent).join("/");
-}
-
-/* liczniki bajtów: instancja -> { n } (trzymane w pamięci SW, sumy
-   odtwarzane z content-length przy zapytaniu stats) */
-const inflight = new Map();
-
-async function getMeta(cache, instId) {
-  const res = await cache.match(`/rt/${encodeURIComponent(instId)}/${META_KEY}`);
-  if (!res) return null;
-  try { return await res.json(); } catch { return null; }
-}
-
-async function upstreamFetch(meta, relPath) {
-  const rel = encPath(relPath);
-  const bases = [
-    `https://raw.githubusercontent.com/${meta.repo}/${meta.ref}/${meta.dir}/${rel}`,
-    `https://cdn.jsdelivr.net/gh/${meta.repo}@${meta.ref}/${meta.dir}/${rel}`,
-  ];
-  let lastErr = "";
-  for (const url of bases) {
-    try {
-      const res = await fetch(url, { mode: "cors", credentials: "omit" });
-      if (!res.ok) { lastErr = `${res.status} (${url.includes("jsdelivr") ? "jsdelivr" : "raw"})`; continue; }
-      return res;
-    } catch (e) { lastErr = e.message; }
-  }
-  return new Response(
-    `<!doctype html><meta charset="utf-8"><body style="background:#14150f;color:#e7e6d8;font-family:monospace;padding:2em">
-     <h1>Plik niedostępny</h1><p>Nie udało się pobrać <b>${relPath}</b> z mirrorów: ${lastErr}</p>
-     <p>Spróbuj ponownie – repozytorium źródłowe mogło zostać zablokowane (DMCA) lub sieć nie odpowiada.</p>`,
-    { status: 502, headers: { "Content-Type": "text/html; charset=utf-8" } },
-  );
-}
-
-async function serveFromCacheOrNetwork(event) {
-  const url = new URL(event.request.url);
-  const parts = url.pathname.split("/").filter(Boolean); // ['rt', instId, ...rel]
-  if (parts[0] !== "rt" || !parts[1]) return null;
-  const instId = decodeURIComponent(parts[1]);
-  let relPath = parts.slice(2).map(decodeURIComponent).join("/");
-
-  const cache = await caches.open(CACHE_PREFIX + instId);
-  const meta = await getMeta(cache, instId);
-  if (!meta) {
-    return new Response(
-      `<!doctype html><meta charset="utf-8"><body style="background:#14150f;color:#e7e6d8;font-family:monospace;padding:2em">
-       <h1>Instancja nie jest zainstalowana</h1><p>Wróć do launchera i uruchom instalację.</p>`,
-      { status: 404, headers: { "Content-Type": "text/html; charset=utf-8" } },
-    );
-  }
-  if (!relPath || relPath.endsWith("/")) relPath = (relPath + meta.entry).replace(/^\/+/, "");
-
-  const cacheKey = new Request(url.origin + "/rt/" + encodeURIComponent(instId) + "/" + encPath(relPath));
-  const hit = await cache.match(cacheKey);
-  if (hit) return hit;
-
-  // leniwe pobranie (duże klasy, assety…) – deduplikacja równoległych żądań
-  const dedupKey = instId + "::" + relPath;
-  if (!inflight.has(dedupKey)) {
-    inflight.set(dedupKey, (async () => {
-      const up = await upstreamFetch(meta, relPath);
-      const buf = await up.arrayBuffer();
-      let body = buf;
-      if (meta.patch && /\.(html?|js|json)$/i.test(relPath)) {
-        body = new TextEncoder().encode(patchText(relPath, new TextDecoder().decode(buf)));
-      }
-      const headers = {
-        "Content-Type": contentTypeFor(relPath),
-        "Content-Length": String(buf.byteLength),
-        "Cache-Control": "no-store",
-      };
-      const resp = new Response(body, { status: 200, headers });
-      await cache.put(cacheKey, resp.clone());
-      broadcastBytes(instId, buf.byteLength);
-      return resp;
-    })().finally(() => inflight.delete(dedupKey)));
-  }
-  return inflight.get(dedupKey);
-}
-
-async function broadcastBytes(instId, added) {
-  const clients = await self.clients.matchAll({ includeUncontrolled: true });
-  for (const c of clients) c.postMessage({ src: "mcw-sw", ev: "bytes", instId, added });
-}
-
-self.addEventListener("install", (e) => { self.skipWaiting(); });
-self.addEventListener("activate", (e) => { e.waitUntil(self.clients.claim()); });
-
-self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
-  if (!url.pathname.startsWith("/rt/")) return;
-  if (event.request.method !== "GET") return;
-  event.respondWith((async () => {
-    const r = await serveFromCacheOrNetwork(event);
-    return r || new Response("Brak", { status: 404 });
+self.addEventListener("install", (e) => {
+  e.waitUntil((async () => {
+    const cache = await caches.open(SHELL);
+    await cache.addAll([
+      "./", "./index.html", "./css/style.css",
+      "./js/main.js", "./js/ui.js", "./js/game.js", "./js/mojo.js",
+      "./js/catalog.js", "./js/mojang.js", "./js/store.js",
+      "./js/netshim.js", "./js/patcher.js",
+      "./assets/hero.png",
+    ]).catch(() => {/* część plików może nie mieć dopasowania – nie blokuj */});
+    // sprzątanie po starym Eagler-podejściu
+    for (const k of await caches.keys()) {
+      if (k !== SHELL && k !== "mcl-data-v1") await caches.delete(k);
+    }
+    await self.skipWaiting();
   })());
 });
 
-self.addEventListener("message", (event) => {
-  const data = event.data || {};
-  if (data.t === "purge") {
-    event.waitUntil(caches.delete(CACHE_PREFIX + data.instId));
-  }
-  if (data.t === "purge-all") {
-    event.waitUntil((async () => {
-      const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k.startsWith(CACHE_PREFIX)).map((k) => caches.delete(k)));
-    })());
-  }
+self.addEventListener("activate", (e) => {
+  e.waitUntil(self.clients.claim());
+});
+
+self.addEventListener("message", (e) => {
+  const d = e.data || {};
+  if (d.purge) caches.delete(SHELL);
+  if (d["purge-all"]) caches.keys().then((ks) => ks.forEach((k) => caches.delete(k)));
+});
+
+self.addEventListener("fetch", (e) => {
+  const req = e.request;
+  if (req.method !== "GET") return; // POST /resolve i inne – serwer
+  const url = new URL(req.url);
+  if (url.origin !== location.origin) return; // piston-mojang itd. idą wprost
+
+  // gry: /app/data/* obsługuje strona (cjFetch) – przepuść
+  if (url.pathname.startsWith("/app/")) return;
+  // pliki origin: zwykły fetch (serwer ma Range + MIME) – cache strony powłoki
+  const isShell = /\.(js|css|png|html)$/.test(url.pathname) || url.pathname === "/";
+  if (!isShell) return;
+
+  e.respondWith((async () => {
+    const cache = await caches.open(SHELL);
+    const hit = await cache.match(req, { ignoreSearch: url.pathname === "/" });
+    if (hit) {
+      // revaliduj w tle (stale-while-revalidate)
+      fetch(req).then((r) => r.ok && cache.put(req, r.clone())).catch(() => {});
+      return hit;
+    }
+    try {
+      const r = await fetch(req);
+      if (r.ok) cache.put(req, r.clone());
+      return r;
+    } catch (err) {
+      const fallback = await cache.match("./index.html");
+      if (fallback && req.mode === "navigate") return fallback;
+      throw err;
+    }
+  })());
 });

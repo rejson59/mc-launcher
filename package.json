@@ -2,9 +2,9 @@
   "name": "mc-launcher-web",
   "private": true,
   "type": "module",
-  "description": "Przeglądarkowy launcher Minecrafta inspirowany MojoLauncher (AutoRAM itd.)",
+  "description": "Przegl\u0105darkowy launcher Minecrafta inspirowany MojoLauncher (AutoRAM itd.)",
   "scripts": {
-    "start": "python3 server.py",
+    "start": "node server.js",
     "check": "for f in js/*.js sw.js; do node --check \"$f\" || exit 1; done"
   },
   "dependencies": {

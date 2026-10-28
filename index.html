@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://cjrtnc.leaningtech.com" crossorigin>
+<script src="https://cjrtnc.leaningtech.com/4.3/loader.js"></script>
 <title>MC Launcher Web – oryginalny Minecraft w przeglądarce</title>
 <meta name="description" content="Launcher inspirowany MojoLauncher: oryginalny Minecraft Java Edition uruchamiany w przeglądarce, z trybem AutoRAM dla słabszych maszyn.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%236b4a2f'/><rect x='1' y='1' width='14' height='14' fill='%235d8f3c'/><rect x='1' y='1' width='14' height='4' fill='%237ab945'/></svg>">
@@ -52,7 +54,8 @@
 <div id="gameview" hidden>
   <div id="game-wrap">
     <div id="game-scale">
-      <iframe id="game-frame" title="Minecraft" allow="pointer-lock; fullscreen; autoplay"></iframe>
+      <div id="game-frame" title="Minecraft"></div>
+      <div id="game-phase" class="game-phase" hidden></div>
     </div>
     <div id="hud">
       <span id="hud-name"></span>
