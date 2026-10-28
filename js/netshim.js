@@ -24,6 +24,11 @@ function gwUrl(host, port) {
   return `${proto}://${location.host}/gw?host=${encodeURIComponent(host)}&port=${port}`;
 }
 
+/** Czy ta strona ma w ogóle szansę na gateway (własny serwer vs Pages/statyka)? */
+function gatewayLikelyPresent() {
+  return !location.hostname.endsWith(".github.io");
+}
+
 function fdField(self) {
   try { return self?.fd?.fd | 0; } catch { return -1; }
 }
@@ -70,6 +75,10 @@ function sockEntry(host, port) {
 
 function attachWs(entry) {
   return new Promise((resolve, reject) => {
+    if (!gatewayLikelyPresent()) {
+      reject(new Error("Ten hosting nie ma gatewaya TCP – multiplayer działa z własnym serwerem: node server.js"));
+      return;
+    }
     const ws = new WebSocket(gwUrl(entry.host, entry.port));
     ws.binaryType = "arraybuffer";
     entry.ws = ws;
@@ -414,11 +423,30 @@ function nioNatives() {
 
 function inetNatives() {
   const lookup = async (host) => {
-    const r = await fetch(`/resolve?host=${encodeURIComponent(host)}`);
-    if (!r.ok) throw new Error("resolve HTTP " + r.status);
-    const j = await r.json();
-    if (!j.addrs?.length) throw new Error("NXDOMAIN");
-    return j.addrs;
+    const enc = encodeURIComponent(host);
+    // 1) własny serwer (node server.js /resolve)
+    try {
+      const r = await fetch(`/resolve?host=${enc}`);
+      if (r.ok) {
+        const j = await r.json();
+        if (j.addrs?.length) return j.addrs;
+      }
+    } catch { /* np. GitHub Pages – dalej DoH z przeglądarki */ }
+    // 2) DNS-over-HTTPS z przeglądarki (działa też bez backendu)
+    for (const url of [
+      `https://dns.google/resolve?name=${enc}&type=A`,
+      `https://cloudflare-dns.com/dns-query?name=${enc}&type=A`,
+    ]) {
+      try {
+        const r = await fetch(url, { headers: { accept: "application/dns-json" } });
+        if (r.ok) {
+          const j = await r.json();
+          const addrs = (j.Answer || []).filter((a) => a.type === 1).map((a) => a.data);
+          if (addrs.length) return addrs;
+        }
+      } catch { /* następny resolver */ }
+    }
+    throw new Error("DNS: nie udało się rozwiązać " + host);
   };
   return {
     Java_java_net_InetAddress_init() {},

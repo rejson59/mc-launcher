@@ -10,6 +10,28 @@ import {
 } from "./ui.js";
 import { isPlaying, exitGame } from "./game.js";
 
+/**
+ * Baza ścieżki (GitHub Pages serwuje pod /<repo>/): przepisujemy lokalne
+ * root-absolute fetch-e (/vendor/, /lwjgl/…) na base+ścieżkę. /app/ ZOSTAJE
+ * root-absolute – tamte URL-e to klucze Cache Storage (cjFetch je obsługuje).
+ */
+window.__MCL_BASE__ = location.pathname.replace(/[^/]*$/, "");
+{
+  const base = window.__MCL_BASE__;
+  const origFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    try {
+      const url = typeof input === "string" ? input : (input && input.url) || "";
+      if (base !== "/" && url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/app/")) {
+        if (/^\/(vendor|lwjgl|assets|css|js|docs)\//.test(url)) {
+          input = base + url.slice(1);
+        }
+      }
+    } catch { /* zostaw jak było */ }
+    return origFetch(input, init);
+  };
+}
+
 /* ---------- Service Worker ---------- */
 
 async function registerSw() {
