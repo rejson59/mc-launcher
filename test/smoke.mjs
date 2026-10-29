@@ -198,6 +198,19 @@ check("netshim: epoll_wait obecny", typeof n.Java_sun_nio_ch_EPoll_epoll_wait ==
   check("robustFetch: zły SHA-1 we wszystkich źródłach → czytelny błąd",
     !!err && /SHA-1/.test(err.message) && /libraries\.minecraft\.net/.test(err.message));
 
+  // wiszące źródła (bez odpowiedzi) → watchdog po timeoutMs, brak zawieszenia
+  globalThis.fetch = (_input, init) =>
+    new Promise((_, rej) => {
+      init?.signal?.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError")));
+    });
+  let hangErr = null;
+  const t0 = Date.now();
+  try {
+    await mojang.robustFetch("https://libraries.minecraft.net/hang.jar", { sha1: want, timeoutMs: 60 });
+  } catch (e) { hangErr = e; }
+  check("robustFetch: watchdog zbija wiszące źródła (instalacja nie stoi)",
+    !!hangErr && Date.now() - t0 < 5000);
+
   globalThis.fetch = savedFetch;
 }
 
