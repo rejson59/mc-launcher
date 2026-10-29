@@ -171,6 +171,83 @@ function bindTouchPad() {
 }
 bindTouchPad();
 
+/* ---------------- zapis wyjścia gry (diagnostyka kodu ≠ 0) ----------------
+ * CheerpJ wypisuje stdout/stderr JVM przez console.log/error do DevTools.
+ * Ring buffer przechwytuje te wyjścia, żeby po „kod 1" pokazać stos wyjątku
+ * w okienku (użytkownik nie musi otwierać DevTools).                 */
+
+const bootLog = [];
+const BOOT_LOG_MAX = 400;
+let consoleHooked = false;
+
+function bootNote(text) {
+  try {
+    const s = String(text);
+    bootLog.push(s.length > 500 ? s.slice(0, 500) + " …" : s);
+    if (bootLog.length > BOOT_LOG_MAX) bootLog.splice(0, bootLog.length - BOOT_LOG_MAX);
+  } catch { /* diagnostyka nigdy nie może przerwać gry */ }
+}
+
+function fmtLogArg(v) {
+  if (typeof v === "string") return v;
+  if (v instanceof Error) return v.stack || String(v);
+  if (v && typeof v === "object") { try { return JSON.stringify(v); } catch { /* jw */ } }
+  return String(v);
+}
+
+function hookConsoleOnce() {
+  if (consoleHooked) return;
+  consoleHooked = true;
+  for (const lvl of ["log", "info", "warn", "error", "debug"]) {
+    const orig = console[lvl] ? console[lvl].bind(console) : null;
+    console[lvl] = (...a) => {
+      const line = a.map(fmtLogArg).join(" ");
+      bootNote((lvl === "warn" || lvl === "error") ? `[${lvl}] ${line}` : line);
+      if (orig) orig(...a);
+    };
+  }
+}
+
+/** Okienko z logiem ostatniego uruchomienia (kod ≠ 0 lub błąd startu). */
+function showCrashDialog(title, context) {
+  document.getElementById("crash-ov")?.remove();
+  const ov = document.createElement("div");
+  ov.id = "crash-ov";
+  ov.className = "crash-ov";
+  const box = document.createElement("div");
+  box.className = "crash-box";
+  const h = document.createElement("div");
+  h.className = "crash-h";
+  h.textContent = title;
+  const metaEl = document.createElement("div");
+  metaEl.className = "crash-meta";
+  metaEl.textContent = [context, navigator.userAgent].filter(Boolean).join(" · ");
+  const pre = document.createElement("pre");
+  pre.className = "crash-log";
+  pre.textContent = bootLog.length
+    ? bootLog.join("\n")
+    : "(brak wyjścia w buforze – otwórz DevTools i sprawdź zakładkę Console)";
+  const row = document.createElement("div");
+  row.className = "crash-actions";
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "btn ghost";
+  copyBtn.textContent = "Kopiuj log";
+  copyBtn.addEventListener("click", async () => {
+    const txt = [title, metaEl.textContent, "", ...bootLog].join("\n");
+    try { await navigator.clipboard.writeText(txt); toast("Log skopiowany – wklej go na czat.", "ok"); }
+    catch { toast("Schowek zabroniony – zaznacz tekst w oknie i kopiuj ręcznie.", "warn"); }
+  });
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "btn danger";
+  closeBtn.textContent = "Zamknij";
+  closeBtn.addEventListener("click", () => ov.remove());
+  ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+  row.append(copyBtn, closeBtn);
+  box.append(h, metaEl, pre, row);
+  ov.appendChild(box);
+  document.body.appendChild(ov);
+}
+
 function phase(text, sub) {
   if (phaseEl) {
     phaseEl.innerHTML = text ? `<div class="phase-t">${text}</div>${sub ? `<div class="phase-s">${sub}</div>` : ""}` : "";
@@ -265,6 +342,8 @@ async function ensureLoader() {
 }
 
 export async function launchInstance(inst) {
+  bootLog.length = 0;
+  hookConsoleOnce();
   const id = inst.id || inst.catalogId || inst.instId?.replace(/^i-/, "");
   if (!id) { toast("Brak wersji do uruchomienia.", "err"); return; }
   const meta = await installedInfo(id);
@@ -288,14 +367,17 @@ export async function launchInstance(inst) {
   startHud();
   phase("Przygotowanie…", id);
 
+  let plan;
   try {
-    const plan = await resolvePlan(id);
+    plan = await resolvePlan(id);
     const args = buildArgs(plan, {
       name: store.state.profile.name,
       uuid: store.state.profile.uuid,
       accessToken: "0",
       userType: "legacy",
     }, meta.type);
+    bootNote(`start ${id} · java${plan.javaMajor} · patched=${meta.patched} · libs=${plan.libs.length} · args=${args.length}`);
+    bootNote(`${plan.mainClass} ${args.slice(0, 16).join(" ")}${args.length > 16 ? " …" : ""}`);
 
     if (!inited) {
       phase("Runtime CheerpJ…", "JVM WebAssembly + gl4es");
@@ -334,10 +416,15 @@ export async function launchInstance(inst) {
     const mainClass = plan.mainClass;
     const code = await window.cheerpjRunMain(mainClass, cp, ...args);
     toast(`Gra zakończyła się (kod ${code}).`, code === 0 ? "ok" : "warn");
+    if (code !== 0) {
+      showCrashDialog(`Gra zakończyła się (kod ${code})`,
+        `${id} · java${plan.javaMajor} · patched=${meta.patched} · libs=${plan.libs.length} · cp=${plan.libs.length + 1}`);
+    }
   } catch (e) {
     console.error("[launch]", e);
     toast("Start nieudany: " + e.message, "err");
     phase("Błąd startu", e.message);
+    showCrashDialog("Start nieudany: " + e.message, `${id} · ${plan?.mainClass || ""}`);
   }
 }
 

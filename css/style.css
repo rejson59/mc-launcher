@@ -400,3 +400,31 @@ textarea.code { font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
 .btn.big { font-size:16px; padding:13px 24px; }
 .btn.danger { background:#5a2530; border-color:#7c3342; }
 .btn.ghost { background:transparent; }
+
+/* ---------------- okienko logu awarii gry ---------------- */
+.crash-ov {
+  position: fixed; inset: 0; z-index: 120;
+  background: rgba(6, 8, 4, .78);
+  display: flex; align-items: center; justify-content: center;
+  padding: 18px;
+}
+.crash-box {
+  display: flex; flex-direction: column;
+  width: min(820px, 96vw); max-height: 86vh;
+  background: var(--panel); color: var(--text);
+  border: 2px solid var(--line); box-shadow: 0 12px 40px var(--shadow);
+  padding: 14px 16px;
+}
+.crash-h { font-weight: 700; color: var(--orange); font-size: 15px; }
+.crash-meta {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  margin-top: 4px; word-break: break-all;
+}
+.crash-log {
+  flex: 1; min-height: 90px; overflow: auto; margin: 10px 0;
+  padding: 10px; background: var(--bg2); color: #c9e7c0;
+  border: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 12px; line-height: 1.4;
+  white-space: pre-wrap; word-break: break-word;
+}
+.crash-actions { display: flex; gap: 8px; justify-content: flex-end; }
