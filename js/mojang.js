@@ -29,7 +29,7 @@ export async function getManifest() {
   manifestPromise = (async () => {
     let data = null;
     try {
-      const r = await fetch(MANIFEST_URL, { cache: "no-cache" });
+      const r = await fetchOnce(MANIFEST_URL, { timeoutMs: 12000, cache: "no-cache" });
       if (!r.ok) throw new Error("HTTP " + r.status);
       data = await r.json();
       try { localStorage.setItem("mcw.manifest.v1", JSON.stringify(data)); } catch { /* prywatny tryb */ }
@@ -202,11 +202,33 @@ function fetchCandidates(rawUrl) {
 }
 
 /**
- * Pobranie bajtów z łańcuchem fallbacku: po 2 próby na źródło (błąd sieci
- * = powtórka), HTTP 4xx/5xx lub zły SHA-1 = natychmiast następne źródło.
- * Abort propaguje się od razu. Zwraca Uint8Array gotowy do Cache Storage.
+ * Jedno pobranie z twardym watchdogiem: po `timeoutMs` (liczone od wysłania
+ * zapytania do końca odczytu ciała) abortujemy – żadne źródło nie zawiesi
+ * instalacji w nieskończoności. Własny sygnał anulowania propaguje się od razu.
  */
-export async function robustFetch(rawUrl, { signal, sha1 } = {}) {
+async function fetchOnce(url, { signal, timeoutMs = 30000, cache = "no-store" } = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const onAbort = () => ctrl.abort();
+  if (signal) {
+    if (signal.aborted) { clearTimeout(timer); throw new DOMException("Anulowano", "AbortError"); }
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    return await fetch(url, { signal: ctrl.signal, cache });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener?.("abort", onAbort);
+  }
+}
+
+/**
+ * Pobranie bajtów z łańcuchem fallbacku: po 2 próby na źródło (błąd sieci
+ * lub timeout = powtórka), HTTP 4xx/5xx lub zły SHA-1 = natychmiast następne
+ * źródło. Anulowanie instalacji propaguje się od razu. Zwraca Uint8Array
+ * gotowy do Cache Storage.
+ */
+export async function robustFetch(rawUrl, { signal, sha1, timeoutMs } = {}) {
   const label = (() => {
     try { return new URL(rawUrl, location.href).host; } catch { return "?"; }
   })();
@@ -215,9 +237,13 @@ export async function robustFetch(rawUrl, { signal, sha1 } = {}) {
     const tag = (() => {
       try { return new URL(url).host; } catch { return "?"; }
     })();
+    const isProxy = /allorigins|corsproxy|codetabs/.test(url);
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const r = await fetch(url, { signal, cache: "no-store" });
+        const r = await fetchOnce(url, {
+          signal,
+          timeoutMs: timeoutMs ?? (isProxy ? 60000 : 30000),
+        });
         if (!r.ok) { last = new Error(`HTTP ${r.status} (${tag})`); break; }
         const body = new Uint8Array(await r.arrayBuffer());
         if (sha1) {
@@ -227,7 +253,9 @@ export async function robustFetch(rawUrl, { signal, sha1 } = {}) {
         if (tag !== label) console.debug("robustFetch", label, "←", tag);
         return body;
       } catch (e) {
-        if (e?.name === "AbortError") throw e;
+        // tylko anulowanie przez użytkownika przerywa łańcuch;
+        // timeout watchdogu (AbortError) = to źródło nie żyje, jedziemy dalej
+        if (signal?.aborted) throw e;
         last = e;
       }
     }
