@@ -196,7 +196,18 @@ check("netshim: epoll_wait obecny", typeof n.Java_sun_nio_ch_EPoll_epoll_wait ==
   try { await mojang.robustFetch("https://libraries.minecraft.net/x.jar", { sha1: want }); }
   catch (e) { err = e; }
   check("robustFetch: zły SHA-1 we wszystkich źródłach → czytelny błąd",
-    !!err && /SHA-1/.test(err.message) && /libraries\.minecraft\.net/.test(err.message));
+    !!err && /SHA-1/.test(err.message) && /libraries\.minecraft\.net/.test(err.message)
+    && /repo1\.maven\.org=/.test(err.message));
+
+  // diagnostyka: ślad wszystkich źródeł z komunikatu (HTTP status per host)
+  globalThis.fetch = async () => new Response("", { status: 404 });
+  let err404 = null;
+  try { await mojang.robustFetch("https://libraries.minecraft.net/y.jar"); }
+  catch (e) { err404 = e; }
+  check("robustFetch: ślad źródeł w błędzie (host=status)",
+    !!err404 && /libraries\.minecraft\.net=HTTP 404/.test(err404.message)
+    && /repo1\.maven\.org=HTTP 404/.test(err404.message)
+    && /allorigins\.win=HTTP 404/.test(err404.message));
 
   // wiszące źródła (bez odpowiedzi) → watchdog po timeoutMs, brak zawieszenia
   globalThis.fetch = (_input, init) =>

@@ -4,7 +4,7 @@
  * z js/game.js prosto z Cache Storage (z obsługą Range), więc tutaj
  * NIC nie ruszamy dla /app/data/* (przepuszczenie = serwer/strona robi swoje).
  */
-const SHELL = "mcl-shell-v3";
+const SHELL = "mcl-shell-v4";
 
 self.addEventListener("install", (e) => {
   e.waitUntil((async () => {

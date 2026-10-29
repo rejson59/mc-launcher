@@ -195,8 +195,9 @@ function fetchCandidates(rawUrl) {
   }
   list.push(
     "https://api.allorigins.win/raw?url=" + encodeURIComponent(origin),
-    "https://corsproxy.io/?url=" + encodeURIComponent(origin),
+    "https://proxy.corsfix.com/?" + origin,
     "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(origin),
+    "https://api.cors.lol/?url=" + encodeURIComponent(origin),
   );
   return list;
 }
@@ -232,23 +233,28 @@ export async function robustFetch(rawUrl, { signal, sha1, timeoutMs } = {}) {
   const label = (() => {
     try { return new URL(rawUrl, location.href).host; } catch { return "?"; }
   })();
+  const trail = new Map(); // host → ostatni błąd (diagnostyka w komunikacie)
+  const note = (tag, msg) => {
+    const prev = trail.get(tag);
+    trail.set(tag, prev ? `${prev}×2` : msg);
+  };
   let last = null;
   for (const url of fetchCandidates(rawUrl)) {
     const tag = (() => {
       try { return new URL(url).host; } catch { return "?"; }
     })();
-    const isProxy = /allorigins|corsproxy|codetabs/.test(url);
+    const isProxy = /allorigins|corsfix|codetabs|cors\.lol/.test(url);
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const r = await fetchOnce(url, {
           signal,
           timeoutMs: timeoutMs ?? (isProxy ? 60000 : 30000),
         });
-        if (!r.ok) { last = new Error(`HTTP ${r.status} (${tag})`); break; }
+        if (!r.ok) { note(tag, `HTTP ${r.status}`); last = new Error(`HTTP ${r.status} (${tag})`); break; }
         const body = new Uint8Array(await r.arrayBuffer());
         if (sha1) {
           const got = await sha1Hex(body);
-          if (got !== sha1) { last = new Error(`SHA-1 nie zgadza się (${tag})`); break; }
+          if (got !== sha1) { note(tag, "SHA-1 nie zgadza się"); last = new Error(`SHA-1 nie zgadza się (${tag})`); break; }
         }
         if (tag !== label) console.debug("robustFetch", label, "←", tag);
         return body;
@@ -256,11 +262,13 @@ export async function robustFetch(rawUrl, { signal, sha1, timeoutMs } = {}) {
         // tylko anulowanie przez użytkownika przerywa łańcuch;
         // timeout watchdogu (AbortError) = to źródło nie żyje, jedziemy dalej
         if (signal?.aborted) throw e;
+        note(tag, e?.message || String(e));
         last = e;
       }
     }
   }
-  throw new Error(`${label}: ${last?.message || "nie udało się pobrać"}`);
+  const detail = [...trail].map(([t, m]) => `${t}=${m}`).join(" | ").slice(0, 400);
+  throw new Error(`${label}: ${detail || last?.message || "nie udało się pobrać"}`);
 }
 
 /* ---------------- plan startu ---------------- */
@@ -376,7 +384,7 @@ export async function installInstance(id, { signal, onProgress } = {}) {
       } catch (e) {
         if (e.name === "AbortError") throw e;
         fail.push(`${j.key}: ${e.message}`);
-        if (fail.length > 6) throw new Error("Instalacja nieudana: " + fail.slice(0, 3).join("; "));
+        if (fail.length > 6) throw new Error(fail.slice(0, 3).join("; ")); // prefiks daje ui.js
       }
     }
   };

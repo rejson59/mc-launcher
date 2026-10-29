@@ -65,7 +65,8 @@ function serveFile(req, res, abs, urlPath) {
     const base = {
       "Content-Type": mime,
       "Accept-Ranges": "bytes",
-      "Cache-Control": urlPath.endsWith(".html") || urlPath === "/" ? "no-cache" : "public, max-age=3600",
+      // shell (js/css/html) zawsze świeży – inaczej przeglądarka trzyma stary kod
+      "Cache-Control": /\.(html|js|css)$/.test(urlPath) || urlPath === "/" ? "no-cache" : "public, max-age=3600",
     };
     const range = req.headers.range;
     if (range) {
