@@ -11,6 +11,14 @@
 import { detectDevice } from "./mojo.js";
 
 export const MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+/**
+ * Własny relay na Vercel (api/relay.js w tym repo, projekt mc-launcher-relay):
+ * serwer Mojang pobiera po stronie konta Vercel i dokleja CORS `*`.
+ * Omija blokady sieciowe ORAZ brak nagłówków CORS na źródle – dlatego jest
+ * drugim kandydatem (zaraz po oryginale), a publiczne proxy zostają na szary
+ * koniec łańcucha. Nadal obowiązuje weryfikacja SHA-1 po stronie klienta.
+ */
+const RELAY_BASE = "https://mc-launcher-relay.vercel.app/api/relay?url=";
 const RESOLVE_URL = "/resolve?host="; // nasz serwer robi DNS (przeglądarka nie umie)
 const CACHE_NAME = "mcl-data-v1";
 
@@ -187,7 +195,7 @@ function fetchCandidates(rawUrl) {
     return [String(rawUrl)]; // URL względny – bez kandydatów zewnętrznych
   }
   const origin = u.toString();
-  const list = [origin];
+  const list = [origin, RELAY_BASE + encodeURIComponent(origin)];
   if (u.hostname === "libraries.minecraft.net") {
     const path = u.pathname.replace(/^\//, "");
     list.push("https://repo1.maven.org/maven2/" + path);
@@ -243,7 +251,7 @@ export async function robustFetch(rawUrl, { signal, sha1, timeoutMs } = {}) {
     const tag = (() => {
       try { return new URL(url).host; } catch { return "?"; }
     })();
-    const isProxy = /allorigins|corsfix|codetabs|cors\.lol/.test(url);
+    const isProxy = /allorigins|corsfix|codetabs|cors\.lol|vercel\.app/.test(url);
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const r = await fetchOnce(url, {
