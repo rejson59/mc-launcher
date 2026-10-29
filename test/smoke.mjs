@@ -190,6 +190,17 @@ check("netshim: epoll_wait obecny", typeof n.Java_sun_nio_ch_EPoll_epoll_wait ==
   check("robustFetch: 404 z oryginału → lustro repo1.maven.org",
     got.length === data.length && got.every((b, i) => b === data[i]));
 
+  // relay Vercel ratuje po padnięciu oryginału (CORS/blokada sieci)
+  globalThis.fetch = async (input) => {
+    const u = String(input?.url || input);
+    if (u.includes("mc-launcher-relay.vercel.app")) return new Response(data, { status: 200 });
+    return new Promise((_, rej) => setTimeout(() => rej(new TypeError("Failed to fetch")), 5));
+  };
+  const viaRelay = await mojang.robustFetch(
+    "https://libraries.minecraft.net/com/mojang/netty/1.8.8/netty-1.8.8.jar", { sha1: want });
+  check("robustFetch: relay Vercel ratuje po padnięciu oryginału",
+    viaRelay.length === data.length && viaRelay.every((b, i) => b === data[i]));
+
   // wszędzie złe bajty → odrzucone po SHA-1, błąd z nazwą hosta
   globalThis.fetch = async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 });
   let err = null;
