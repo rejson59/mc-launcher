@@ -11,8 +11,9 @@
  * Hook w js/game.js (cjFetch) zostaje jako pas bezpieczeństwa dla form
  * ścieżek, które trafiają do okna.
  */
-const SHELL = "mcl-shell-v10";
+const SHELL = "mcl-shell-v11";
 const GAME_DATA = "mcl-data-v1";
+const CJRT = "mcl-cjrt-v43"; // runtime CheerpJ (https://cjrtnc.leaningtech.com/4.3/…)
 
 self.addEventListener("install", (e) => {
   e.waitUntil((async () => {
@@ -26,7 +27,7 @@ self.addEventListener("install", (e) => {
     ]).catch(() => {/* część plików może nie mieć dopasowania – nie blokuj */});
     // sprzątanie po starym Eagler-podejściu
     for (const k of await caches.keys()) {
-      if (k !== SHELL && k !== GAME_DATA) await caches.delete(k);
+      if (k !== SHELL && k !== GAME_DATA && k !== CJRT) await caches.delete(k);
     }
     await self.skipWaiting();
   })());
@@ -123,6 +124,26 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET" && req.method !== "HEAD") return;
   const url = new URL(req.url);
+
+  // runtime CheerpJ: cache-first z revalidacją w tle. Pierwsze ładowanie
+  // ściąga z cjrtnc dziesiątki MB (loader + /lt/8/…); kolejne starty mają
+  // iść z cache, żeby telefon nie palił CPU i łącza przy każdym uruchomieniu.
+  if (url.origin === "https://cjrtnc.leaningtech.com") {
+    e.respondWith((async () => {
+      const cache = await caches.open(CJRT);
+      const hit = await cache.match(req);
+      if (hit) {
+        fetch(req)
+          .then((r) => r && (r.ok || r.type === "opaque") && cache.put(req, r.clone()))
+          .catch(() => {});
+        return hit;
+      }
+      const r = await fetch(req);
+      if (r.ok || r.type === "opaque") cache.put(req, r.clone());
+      return r;
+    })());
+    return;
+  }
   if (url.origin !== location.origin) return;
 
   // dane gry CheerpJ-a (bez względu na to, czy przyszło z prefiksem /app/)

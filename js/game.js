@@ -378,7 +378,7 @@ setInterval(() => {
   }
   if (phaseS && launchPending) {
     const secs = Math.round((Date.now() - launchT0) / 1000);
-    phaseS.textContent = phaseSubBase + ` · ${secs} s`
+    phaseS.textContent = phaseSubBase + ` · ${secs} s · sygnały JVM: ${window.__mclAct | 0}`
       + (secs >= 20 && !bootLog.length ? " – brak wyjścia; F12 → Console" : "");
   }
   if (!launchPending || copying) return; // podczas kopiowania karta ma zostać
@@ -575,7 +575,7 @@ export async function launchInstance(inst) {
     ].join(":");
 
     applyScale(resolveRenderScale());
-    phase("Uruchomianie gry…", "JVM wczytuje biblioteki i klienta – na telefonie potrafi zająć 0,5–1,5 min. Log rośnie poniżej; jeśli ucichnie, gra wystartowała – przycisk Ukryj.");
+    phase("Uruchomianie gry…", "JVM wczytuje klienta – na telefonie 0,5–2 min. Rosnące „sygnały JVM” = gra pracuje; cisza po postępach = wystartowała (Ukryj).");
     const mainClass = plan.mainClass;
     const code = await window.cheerpjRunMain(mainClass, cp, ...args);
     launchPending = false;

@@ -165,6 +165,11 @@ function memView(lib, ptr, len) {
 
 /* ---------------- natives: java.net (wersje ≤1.6) ---------------- */
 
+/* Licznik aktywności JVM dla HUDu: rosnący = gra pracuje (nie wisi). */
+function act() {
+  window.__mclAct = (window.__mclAct | 0) + 1;
+}
+
 function plainNatives() {
   return {
     Java_java_net_PlainSocketImpl_initProto() {},
@@ -178,6 +183,7 @@ function plainNatives() {
     },
 
     async Java_java_net_PlainSocketImpl_socketConnect(_lib, self, address, port, _timeout) {
+      act();
       const fd = fdField(self);
       const e = table.get(fd);
       if (!e) throw new Error("socket bez fd");
@@ -234,6 +240,7 @@ function plainNatives() {
     Java_java_net_SocketOutputStream_init() {},
 
     async Java_java_net_SocketInputStream_socketRead0(_lib, self, _fdObj, b, off, len, timeout) {
+      act();
       const e = table.get(fdField(self));
       if (!e) throw new Error("read na zamkniętym fd");
       const chunk = await readBytes(e, len | 0, timeout | 0);
@@ -277,6 +284,7 @@ function nioNatives() {
     Java_sun_nio_ch_Net_bind0() { /* client v1 */ },
     Java_sun_nio_ch_Net_listen() { /* hostowanie poza zakresem */ },
     async Java_sun_nio_ch_Net_connect0(_lib, fdObj, remote, remotePort) {
+      act();
       const fd = fdObj?.fd | 0;
       const e = table.get(fd);
       if (!e) throw new Error("connect0: brak fd");
@@ -301,10 +309,12 @@ function nioNatives() {
     Java_sun_nio_ch_Net_getIntOption0(_lib, _fdObj, _conv, _level, _opt) { return 0; },
     Java_sun_nio_ch_Net_setIntOption0() { /* no-op */ },
     async Java_sun_nio_ch_Net_poll(_lib, fdObj, events, timeout) {
+      act();
       const e = table.get(fdObj?.fd | 0);
       if (!e) return POLLNVAL;
       const want = events | 0;
-      const deadline = Date.now() + Math.max(0, Number(timeout));
+      const pollTo = Number(timeout);
+      const deadline = Date.now() + Math.max(0, pollTo);
       for (;;) {
         let re = 0;
         if (e.kind === "pipe") {
@@ -316,7 +326,10 @@ function nioNatives() {
         }
         if (re) return re;
         const left = deadline - Date.now();
-        if (left <= 0) return 0;
+        if (left <= 0) {
+          if (pollTo <= 0) await new Promise((r) => setTimeout(r, 4)); // poll(0) spin → oddaj wątek
+          return 0;
+        }
         await new Promise((r) => setTimeout(r, Math.min(20, left)));
       }
     },
@@ -386,9 +399,11 @@ function nioNatives() {
       return 0;
     },
     async Java_sun_nio_ch_EPoll_epoll_wait(_lib, epfd, eventPtr, maxevents, timeout) {
+      act();
       const ep = table.get(epfd | 0);
       if (!ep || ep.kind !== "epoll") return -1;
-      const deadline = Date.now() + Math.max(0, Number(timeout));
+      const epTo = Number(timeout);
+      const deadline = Date.now() + Math.max(0, epTo);
       const v = lib0.getJNIDataView();
       for (;;) {
         let n = 0;
@@ -412,7 +427,10 @@ function nioNatives() {
         }
         if (n > 0) return n;
         const left = deadline - Date.now();
-        if (left <= 0) return 0;
+        if (left <= 0) {
+          if (epTo <= 0) await new Promise((r) => setTimeout(r, 4)); // epoll(0) spin → oddaj wątek
+          return 0;
+        }
         await new Promise((r) => setTimeout(r, Math.min(20, left)));
       }
     },
@@ -433,6 +451,7 @@ async function javaStrings(lib, arr) {
 function inetNatives() {
   const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
   const lookup = async (lib, hostRaw) => {
+    act();
     try {
       // host: jstring → JS string; metoda jest INSTANCYJNA, więc trafia tu
       // też self – zdefiniowane niżej z pełną sygnaturą (lib, self, host).

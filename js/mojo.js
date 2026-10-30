@@ -73,9 +73,11 @@ export function isDevicePowerful(info) {
  * findBestResolution() – zwraca procent rozdzielczości gry:
  * celujemy w min. bok 720p dla zwykłych urządzeń i 1080p dla mocnych,
  * wynik zaokrąglony w górę do skoku co 5% (jak suwak `resolutionRatio`).
+ * Telefony/tablety (touch): 640p – GL4ES liczy piksele na CPU, wyższa
+ * rozdzielczość = otwarta lodówka i slajdy zamiast gry.
  */
-export function findBestResolution(minSidePx, powerful, increment = 5) {
-  const targetSide = powerful ? 1080 : 720;
+export function findBestResolution(minSidePx, powerful, increment = 5, touch = false) {
+  const targetSide = touch ? 640 : powerful ? 1080 : 720;
   if (minSidePx <= targetSide) return 100;
   const ratio = (100 * targetSide) / minSidePx;
   return Math.min(100, Math.ceil(ratio / increment) * increment);
@@ -112,15 +114,16 @@ export function detectDevice() {
   const deviceRamMB = detectDeviceMemoryMB();
   const cores = detectCores();
   const minSidePx = detectMinSidePx();
+  const touch = matchMedia("(pointer: coarse)").matches;
   const powerful = isDevicePowerful({ deviceRamMB, cores, minSidePx });
-  const resolutionPct = findBestResolution(minSidePx, powerful);
+  const resolutionPct = findBestResolution(minSidePx, powerful, 5, touch);
   const renderer = detectRendererTier();
   const ramMb = findBestRAMAllocation(deviceRamMB);
   return {
     deviceRamMB, cores, minSidePx, powerful, resolutionPct, renderer, ramMb,
     lowRam: deviceRamMB < 1024,
     dpr: window.devicePixelRatio || 1,
-    touch: matchMedia("(pointer: coarse)").matches,
+    touch,
   };
 }
 
