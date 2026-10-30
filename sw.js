@@ -11,7 +11,7 @@
  * Hook w js/game.js (cjFetch) zostaje jako pas bezpieczeństwa dla form
  * ścieżek, które trafiają do okna.
  */
-const SHELL = "mcl-shell-v8";
+const SHELL = "mcl-shell-v9";
 const GAME_DATA = "mcl-data-v1";
 
 self.addEventListener("install", (e) => {
@@ -21,7 +21,7 @@ self.addEventListener("install", (e) => {
       "./", "./index.html", "./css/style.css",
       "./js/main.js", "./js/ui.js", "./js/game.js", "./js/mojo.js",
       "./js/catalog.js", "./js/mojang.js", "./js/store.js",
-      "./js/netshim.js", "./js/patcher.js",
+      "./js/netshim.js", "./js/patcher.js", "./js/mcfs.js",
       "./assets/hero.png",
     ]).catch(() => {/* część plików może nie mieć dopasowania – nie blokuj */});
     // sprzątanie po starym Eagler-podejściu
