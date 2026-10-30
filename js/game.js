@@ -107,13 +107,26 @@ async function cjFetch(input, init) {
   }
   let path = url;
   try { if (/^https?:/.test(url)) path = new URL(url, location.href).pathname; } catch { /* jw */ }
-  path = decodeURIComponent(path);
+  try { path = decodeURIComponent(path); } catch { /* jw */ }
+  // kanon: każda forma (z/prefiksem /app, względna) → klucz instalacji
+  const gi = path.search(/\/(?:app\/)?data\/vanilla\//);
+  if (gi >= 0) {
+    path = path.slice(gi);
+    if (!path.startsWith("/app/")) path = "/app" + path;
+  }
   if (path.startsWith("/app/data/vanilla/")) {
     const cache = await caches.open(MOJANG_CACHE);
     const headers = new Headers(init?.headers || {});
+    if (typeof input === "object" && input?.headers) {
+      new Headers(input.headers).forEach((v, k) => headers.set(k, v));
+    }
     let hit = await cache.match(path);
     if (!hit) hit = await virtualLookup(cache, path);
-    if (hit) return await rangeResponse(hit, headers);
+    if (hit) {
+      if (/\.jar$/.test(path)) bootNote(`hook HIT ${path}`);
+      return await rangeResponse(hit, headers);
+    }
+    bootNote(`hook MISS ${path}`); // hook może być nieaktywny (CheerpJ 4 bez fetch) – linia i tak nie zaszkodzi
     return new Response("", { status: 204 }); // brak pliku = po cichu (reguła CheerpJ)
   }
   // zwykłe pliki origin (vendor/, lwjgl/) z lekkim retry
@@ -179,11 +192,13 @@ bindTouchPad();
 const bootLog = [];
 const BOOT_LOG_MAX = 400;
 let consoleHooked = false;
+let launchT0 = Date.now();
 
 function bootNote(text) {
   try {
     const s = String(text);
-    bootLog.push(s.length > 500 ? s.slice(0, 500) + " …" : s);
+    const line = `[+${Date.now() - launchT0}ms] ${s.length > 500 ? s.slice(0, 500) + " …" : s}`;
+    bootLog.push(line);
     if (bootLog.length > BOOT_LOG_MAX) bootLog.splice(0, bootLog.length - BOOT_LOG_MAX);
   } catch { /* diagnostyka nigdy nie może przerwać gry */ }
 }
@@ -343,6 +358,7 @@ async function ensureLoader() {
 
 export async function launchInstance(inst) {
   bootLog.length = 0;
+  launchT0 = Date.now();
   hookConsoleOnce();
   const id = inst.id || inst.catalogId || inst.instId?.replace(/^i-/, "");
   if (!id) { toast("Brak wersji do uruchomienia.", "err"); return; }
@@ -385,7 +401,8 @@ export async function launchInstance(inst) {
 
       const { socketNativesWrapped } = await import("./netshim.js");
       await window.cheerpjInit({
-        fetch: cjFetch,
+        fetch: cjFetch, // CheerpJ 4 formalnie bez hooka – trzymamy jako pas; priorytet: SW (patrz sw.js)
+        overrideDocumentBase: new URL("./", location.href).href, // /app/ → HTTP względem BAZY strony (scope SW)
         version: plan.javaMajor >= 17 ? 17 : 8,
         status: "none",
         javaProperties: [
@@ -446,6 +463,7 @@ export function exitGame() {
 /** Odświeżenie HUD-u bufora z wiadomości SW (jeśli SW jeszcze rozsyła). */
 window.addEventListener("message", (e) => {
   const d = e.data;
+  if (d?.src === "mcw-sw" && d.ev === "fetchlog") { bootNote("sw " + d.msg); return; }
   if (d?.src === "mcw-sw" && d.ev === "bytes" && playing && hudBufor) {
     hudBufor.textContent = `Bufor +${(d.added / 1048576).toFixed(1)} MB`;
   }
