@@ -25,6 +25,12 @@ const NATIVES = [
   { name: "liblwjgl.so", url: "vendor/lwjgl/liblwjgl.so" },
   { name: "gl4es.wasm", url: "vendor/lwjgl/gl4es.wasm" },
 ];
+/** Skąd brać pliki natywne: strona lokalnie, a w zapasie zawsze Pages
+ * (origin relay na Vercel nie ma binariów vendor/ – tylko tekst). */
+const NATIVE_BASES = () => [
+  new URL("vendor/lwjgl/", location.href).href,
+  "https://rejson59.github.io/mc-launcher/vendor/lwjgl/",
+];
 const STR_TMP = "/str/mcfs.tmp";
 const COPY_BUF = 65536;
 
@@ -206,8 +212,23 @@ export async function ensureGameFiles(id, meta, plan, { log, onProgress } = {}) 
       const j = jobs[i];
       let data;
       if (j.url) {
-        const r = await fetch(j.url, { cache: "no-cache" });
-        if (!r.ok) throw new Error(`${j.url} → HTTP ${r.status}`);
+        /* natywy: strona lokalnie, potem zawsze z Pages (origin bez vendor/) */
+        const cands = j.url.startsWith("vendor/lwjgl/")
+          ? NATIVE_BASES().map((b) => b + j.url.slice("vendor/lwjgl/".length))
+          : [j.url];
+        let r = null;
+        let why = "błąd sieci";
+        for (const u of cands) {
+          try {
+            r = await fetch(u, { cache: "no-cache" });
+            if (r.ok) break;
+            why = `HTTP ${r.status}`;
+          } catch (e) {
+            why = String(e?.message || e);
+          }
+          r = null;
+        }
+        if (!r) throw new Error(`${j.url} → ${why}`);
         data = new Uint8Array(await r.arrayBuffer());
       } else {
         const resp = await cache.match(j.src);
