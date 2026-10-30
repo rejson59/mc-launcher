@@ -11,7 +11,7 @@
  * Hook w js/game.js (cjFetch) zostaje jako pas bezpieczeństwa dla form
  * ścieżek, które trafiają do okna.
  */
-const SHELL = "mcl-shell-v9";
+const SHELL = "mcl-shell-v10";
 const GAME_DATA = "mcl-data-v1";
 
 self.addEventListener("install", (e) => {

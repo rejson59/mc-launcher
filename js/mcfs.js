@@ -72,19 +72,27 @@ function cjWrite(path, bytes) {
 async function ensureDirs(dirs) {
   const lib = await javaLib();
   const File = await lib.java.io.File;
+  const list = [...dirs];
   let created = 0;
-  for (const d of dirs) {
-    const f = await new File(d);
-    const ok = await f.mkdirs();
-    if (truthy(ok)) { created++; continue; } // utworzony
-    const ex = await f.exists(); // 0 = istniał wcześniej albo realna awaria
-    if (!truthy(ex)) throw new Error(`mkdirs: ${d} (ok=${String(ok)}, exists=${String(ex)})`);
-  }
+  let cursor = 0;
+  const worker = async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= list.length) return;
+      const d = list[i];
+      const f = await new File(d);
+      const ok = await f.mkdirs();
+      if (truthy(ok)) { created++; continue; } // utworzony
+      const ex = await f.exists(); // 0 = istniał wcześniej albo realna awaria
+      if (!truthy(ex)) throw new Error(`mkdirs: ${d} (ok=${String(ok)}, exists=${String(ex)})`);
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
   return created;
 }
 
-/** Fallback: kopiowanie /str → /str→/files JAVĄ (czyste java.io). */
-async function javaCopyFromStr(dstPath, expected) {
+/** Fallback: kopiowanie /str → /files JAVĄ (czyste java.io). */
+async function javaCopyFromStr(dstPath, expected, srcPath = STR_TMP) {
   const lib = await javaLib();
   const File = await lib.java.io.File;
   const FileInputStream = await lib.java.io.FileInputStream;
@@ -95,7 +103,7 @@ async function javaCopyFromStr(dstPath, expected) {
   if (!truthy(okM) && !truthy(await df.exists())) {
     throw new Error(`mkdirs: ${parent} (ok=${String(okM)})`);
   }
-  const fin = await new FileInputStream(STR_TMP);
+  const fin = await new FileInputStream(srcPath);
   try {
     const out = await new FileOutputStream(dstPath);
     try {
@@ -187,35 +195,43 @@ export async function ensureGameFiles(id, meta, plan, { log, onProgress } = {}) 
   let done = 0;
   let bytes = 0;
   let fallback = 0;
+  let cursor = 0;
   const report = () => onProgress?.(done, total, bytes);
   report();
 
-  for (const j of jobs) {
-    let data;
-    if (j.url) {
-      const r = await fetch(j.url, { cache: "no-cache" });
-      if (!r.ok) throw new Error(`${j.url} → HTTP ${r.status}`);
-      data = new Uint8Array(await r.arrayBuffer());
-    } else {
-      const resp = await cache.match(j.src);
-      if (!resp) throw new Error(`brak w cache: ${j.src}`);
-      data = new Uint8Array(await resp.arrayBuffer());
+  const runOne = async (slot) => {
+    while (true) {
+      const i = cursor++;
+      if (i >= jobs.length) return;
+      const j = jobs[i];
+      let data;
+      if (j.url) {
+        const r = await fetch(j.url, { cache: "no-cache" });
+        if (!r.ok) throw new Error(`${j.url} → HTTP ${r.status}`);
+        data = new Uint8Array(await r.arrayBuffer());
+      } else {
+        const resp = await cache.match(j.src);
+        if (!resp) throw new Error(`brak w cache: ${j.src}`);
+        data = new Uint8Array(await resp.arrayBuffer());
+      }
+      try {
+        await withTimeout(cjWrite(j.dst, data), 30000, j.dst);
+      } catch (e) {
+        fallback++;
+        if (fallback <= 3) log?.(`cjWrite: ${e?.message} → fallback /str+java.io`);
+        const tmp = `/str/mcfs-${slot}.tmp`;
+        window.cheerpOSAddStringFile(tmp, data);
+        await withTimeout(javaCopyFromStr(j.dst, data.byteLength, tmp), 60000, "javaCopy " + j.dst);
+      }
+      done++;
+      bytes += data.byteLength;
+      if (done % 100 === 0 || done === total) {
+        log?.(`${done}/${total} plików · ${(bytes / 1048576).toFixed(1)} MB`);
+        report();
+      }
     }
-    try {
-      await withTimeout(cjWrite(j.dst, data), 30000, j.dst);
-    } catch (e) {
-      fallback++;
-      if (fallback <= 3) log?.(`cjWrite: ${e?.message} → fallback /str+java.io`);
-      window.cheerpOSAddStringFile(STR_TMP, data);
-      await withTimeout(javaCopyFromStr(j.dst, data.byteLength), 60000, "javaCopy " + j.dst);
-    }
-    done++;
-    bytes += data.byteLength;
-    if (done % 100 === 0 || done === total) {
-      log?.(`${done}/${total} plików · ${(bytes / 1048576).toFixed(1)} MB`);
-      report();
-    }
-  }
+  };
+  await Promise.all([0, 1, 2, 3].map((slot) => runOne(slot)));
   await withTimeout(cjWrite(stampPath, new TextEncoder().encode(stampWant)), 8000, "stamp");
   report();
   log?.(`gotowe: ${total} plików · ${(bytes / 1048576).toFixed(1)} MB → ${MC_ROOT} (fallback: ${fallback})`);
