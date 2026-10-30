@@ -11,6 +11,7 @@ import { toast, swReady } from "./ui.js";
 import {
   resolvePlan, buildArgs, buildOptionsPreset, installedInfo, MOJANG_CACHE,
 } from "./mojang.js";
+import { ensureGameFiles, MC_ROOT } from "./mcfs.js";
 import { store } from "./store.js";
 
 const CJ_LOADER = "https://cjrtnc.leaningtech.com/4.3/loader.js";
@@ -310,6 +311,7 @@ try {
 /* ---------------- faza startu: karta z ŻYWYM logiem ---------------- */
 let tailOn = false;
 let launchPending = false;
+let copying = false;
 let lastBootAt = Date.now();
 let tailDirty = false;
 let lastTailText = "";
@@ -379,7 +381,7 @@ setInterval(() => {
     phaseS.textContent = phaseSubBase + ` · ${secs} s`
       + (secs >= 20 && !bootLog.length ? " – brak wyjścia; F12 → Console" : "");
   }
-  if (!launchPending) return;
+  if (!launchPending || copying) return; // podczas kopiowania karta ma zostać
   const now = Date.now();
   if (cursorSeenAt) return tailHide(); // Java ustawia kursor = interfejs żyje
   if (bootLog.length && now - launchT0 > 10000 && now - lastBootAt > 6000) return tailHide(); // postęp i cisza
@@ -528,10 +530,10 @@ export async function launchInstance(inst) {
         version: plan.javaMajor >= 17 ? 17 : 8,
         status: "none",
         javaProperties: [
-          "java.library.path=/vendor/lwjgl/",
+          `java.library.path=${MC_ROOT}/natives/`,
           "sun.java2d.opengl=false",
         ],
-        libraries: { "libGL.so.1": "/vendor/lwjgl/gl4es.wasm" },
+        libraries: { "libGL.so.1": `${MC_ROOT}/natives/gl4es.wasm` },
         enableX11: true,
         preloadResources: BASE_PRELOAD,
         preloadProgress: (done, total) => {
@@ -552,9 +554,21 @@ export async function launchInstance(inst) {
     }
 
     phase("Start gry…", `${meta.mainClass || plan.mainClass} · ${args.length} arg.`);
+    phase("Przenoszenie plików…", "Cache → /files (IndexedDB) – jednorazowo dla tej wersji");
+    copying = true;
+    try {
+      const mig = await ensureGameFiles(id, meta, plan, {
+        log: (m) => bootNote("files: " + m),
+        onProgress: (done, total, b) => phase("Przenoszenie plików…",
+          `${done}/${total} · ${(b / 1048576).toFixed(1)} MB · Cache → /files`),
+      });
+      bootNote(mig.skipped ? "files: /files gotowe (znacznik .ready)" : "files: kopia zakończona");
+    } finally {
+      copying = false;
+    }
     await seedOptionsCheerpJ(id);
 
-    const base = `/app/data/vanilla/${id}`;
+    const base = `${MC_ROOT}/vanilla/${id}`;
     const cp = [
       ...plan.libs.map((l) => `${base}/libraries/${l.path}`),
       `${base}/${meta.patched ? "client-patched.jar" : "client.jar"}`,
