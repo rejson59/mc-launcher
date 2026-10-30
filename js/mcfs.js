@@ -7,14 +7,15 @@
  * `fetch` w cheerpjInit już nie ma → client.jar =404 („Could not find or
  * load main class"). Jedyny kanał pewny niezależnie od hosta to /files/ –
  * trwały IndexedDB czytany przez VFS CheerpJ-a wprost, bez HTTP.
- * Wzorzec: leaningtech/browsercraft trzyma client.jar właśnie w /files/.
  *
- * Przenosimy jednorazowo (ze znacznikiem .ready porównywanym z installedAt):
- *  - natywy + gl4es → /files/minecraft/natives/ (pod java.library.path i `libraries`),
- *  - client.jar + biblioteki (źródło: Cache Storage instalacji),
- *  - assety w wariancie właściwym dla wersji: objects+indexes (domyślnie),
- *    virtual/ (idx.virtual) lub resources/ (idx.map_to_resources ≤1.5).
- * Odczyt znacznika przez cjFileBlob; brak/zmiana = pełna kopia ponownie.
+ * Zapis (trzy warstwy, bo cheerpOSOpen na zagnieżdżonej ścieżce bez katalogów
+ * rodziców zwraca fd=-1 – stock 4.3 nie tworzy rodziców sam):
+ *   1. katalogi: java.io.File.mkdirs przez library mode (nio z bugiem na 4.3),
+ *   2. plik: cheerpOSOpen/Write/Close (wzorzec browsercraft, root /files ✓),
+ *   3. fallback: cheerpOSAddStringFile → /str (dokumentowany, Uint8Array)
+ *      + kopiowanie JAVĄ (FileInputStream → FileOutputStream, bufor 64 KB)
+ *      i weryfikacja length() == spodziewany rozmiar.
+ * Znacznik .ready (cjFileBlob, JSON installedAt/patched) = kopia jednorazowa.
  */
 import { MOJANG_CACHE } from "./mojang.js";
 
@@ -24,6 +25,8 @@ const NATIVES = [
   { name: "liblwjgl.so", url: "vendor/lwjgl/liblwjgl.so" },
   { name: "gl4es.wasm", url: "vendor/lwjgl/gl4es.wasm" },
 ];
+const STR_TMP = "/str/mcfs.tmp";
+const COPY_BUF = 65536;
 
 function withTimeout(p, ms, label) {
   let timer;
@@ -33,7 +36,21 @@ function withTimeout(p, ms, label) {
   ]).finally(() => clearTimeout(timer));
 }
 
-/** Zapis bajtów do VFS CheerpJ (wzorzec browsercraft: Open/Write/Close). */
+// library-mode: naturalne prymitywy albo opakowania {value0} ze starych API.
+function truthy(v) { return v === true || v?.value0 === true; }
+
+let libJava = null;
+async function javaLib() {
+  if (!libJava) {
+    if (typeof window.cheerpjRunLibrary !== "function") {
+      throw new Error("brak cheerpjRunLibrary (CheerpJ niezainicjowany?)");
+    }
+    libJava = await window.cheerpjRunLibrary("");
+  }
+  return libJava;
+}
+
+/** Zapis bajtów do VFS (stare API JS → /files; benchmark: browsercraft). */
 function cjWrite(path, bytes) {
   return new Promise((resolve, reject) => {
     try {
@@ -46,6 +63,53 @@ function cjWrite(path, bytes) {
       });
     } catch (e) { reject(e); }
   });
+}
+
+/** Tworzy katalogi (java.io.File.mkdirs – rekurencyjnie, idempotentnie). */
+async function ensureDirs(dirs) {
+  const lib = await javaLib();
+  const File = await lib.java.io.File;
+  let created = 0;
+  for (const d of dirs) {
+    const f = await new File(d);
+    const ok = await f.mkdirs();
+    const ex = await f.exists();
+    if (!truthy(ex)) throw new Error(`mkdirs nie utworzył katalogu ${d} (ok=${String(ok)})`);
+    if (truthy(ok)) created++;
+  }
+  return created;
+}
+
+/** Fallback: kopiowanie /str → /str→/files JAVĄ (czyste java.io). */
+async function javaCopyFromStr(dstPath, expected) {
+  const lib = await javaLib();
+  const File = await lib.java.io.File;
+  const FileInputStream = await lib.java.io.FileInputStream;
+  const FileOutputStream = await lib.java.io.FileOutputStream;
+  const parent = dstPath.slice(0, dstPath.lastIndexOf("/")) || "/files";
+  const df = await new File(parent);
+  if (!truthy(await df.mkdirs()) && !truthy(await df.exists())) {
+    throw new Error("mkdirs: " + parent);
+  }
+  const fin = await new FileInputStream(STR_TMP);
+  try {
+    const out = await new FileOutputStream(dstPath);
+    try {
+      const ArrayCls = await lib.java.lang.reflect.Array;
+      const Byte = await lib.java.lang.Byte;
+      const buf = await ArrayCls.newInstance(await Byte.TYPE, COPY_BUF);
+      let guard = Math.ceil(expected / COPY_BUF) + 16;
+      while (guard-- > 0) {
+        const n = await fin.read(buf);
+        if (typeof n !== "number") throw new Error(`read zwróciło ${typeof n}, nie number`);
+        if (n <= 0) break;
+        await out.write(buf, 0, n);
+      }
+      if (guard < 0) throw new Error("pętla kopiowania przekroczyła gwarancję");
+    } finally { await out.close(); }
+  } finally { await fin.close(); }
+  const got = Number(await new File(dstPath).length());
+  if (got !== expected) throw new Error(`rozmiar po kopiowaniu ${got} ≠ ${expected}`);
 }
 
 async function stampMatches(path, want) {
@@ -65,7 +129,7 @@ export async function ensureGameFiles(id, meta, plan, { log, onProgress } = {}) 
   const base = `${MC_ROOT}/vanilla/${id}`;
   const stampPath = `${base}/.ready`;
   const stampWant = JSON.stringify({
-    v: 1, natives: 1, installedAt: meta.installedAt, patched: !!meta.patched,
+    v: 2, natives: 1, installedAt: meta.installedAt, patched: !!meta.patched,
   });
 
   if (await stampMatches(stampPath, stampWant)) {
@@ -103,10 +167,21 @@ export async function ensureGameFiles(id, meta, plan, { log, onProgress } = {}) 
     }
   }
 
+  /* --- katalogi rodzice (bez nich cheerpOSOpen daje fd=-1) --- */
+  const dirs = new Set([MC_ROOT, `${MC_ROOT}/natives`, base]);
+  for (const j of jobs) dirs.add(j.dst.slice(0, j.dst.lastIndexOf("/")) || MC_ROOT);
+  try {
+    const created = await withTimeout(ensureDirs([...dirs]), 60000, "mkdirs");
+    log?.(`katalogi: ${dirs.size} (nowe: ${created})`);
+  } catch (e) {
+    log?.(`mkdirs nie doszedł (${e?.message || e}) – piszę mimo to`);
+  }
+
   const total = jobs.length;
   log?.(`zadań kopiowania: ${total}`);
   let done = 0;
   let bytes = 0;
+  let fallback = 0;
   const report = () => onProgress?.(done, total, bytes);
   report();
 
@@ -121,7 +196,14 @@ export async function ensureGameFiles(id, meta, plan, { log, onProgress } = {}) 
       if (!resp) throw new Error(`brak w cache: ${j.src}`);
       data = new Uint8Array(await resp.arrayBuffer());
     }
-    await withTimeout(cjWrite(j.dst, data), 30000, j.dst);
+    try {
+      await withTimeout(cjWrite(j.dst, data), 30000, j.dst);
+    } catch (e) {
+      fallback++;
+      if (fallback <= 3) log?.(`cjWrite: ${e?.message} → fallback /str+java.io`);
+      window.cheerpOSAddStringFile(STR_TMP, data);
+      await withTimeout(javaCopyFromStr(j.dst, data.byteLength), 60000, "javaCopy " + j.dst);
+    }
     done++;
     bytes += data.byteLength;
     if (done % 100 === 0 || done === total) {
@@ -131,6 +213,6 @@ export async function ensureGameFiles(id, meta, plan, { log, onProgress } = {}) 
   }
   await withTimeout(cjWrite(stampPath, new TextEncoder().encode(stampWant)), 8000, "stamp");
   report();
-  log?.(`gotowe: ${total} plików · ${(bytes / 1048576).toFixed(1)} MB → ${MC_ROOT}`);
-  return { total, bytes };
+  log?.(`gotowe: ${total} plików · ${(bytes / 1048576).toFixed(1)} MB → ${MC_ROOT} (fallback: ${fallback})`);
+  return { total, bytes, fallback };
 }
