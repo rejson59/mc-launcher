@@ -421,39 +421,71 @@ function nioNatives() {
 
 /* ---------------- natives: DNS ---------------- */
 
+/** String[] po stronie Javy (LiveConnect niekoniecznie skonwertuje string[]). */
+async function javaStrings(lib, arr) {
+  const ArrayCls = await lib.java.lang.reflect.Array;
+  const StringCls = await lib.java.lang.String;
+  const ja = await ArrayCls.newInstance(StringCls, arr.length);
+  for (let i = 0; i < arr.length; i++) ja[i] = String(arr[i]);
+  return ja;
+}
+
 function inetNatives() {
-  const lookup = async (host) => {
-    const enc = encodeURIComponent(host);
-    // 1) własny serwer (node server.js /resolve)
+  const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+  const lookup = async (lib, hostRaw) => {
     try {
-      const r = await fetch(`/resolve?host=${enc}`);
-      if (r.ok) {
-        const j = await r.json();
-        if (j.addrs?.length) return j.addrs;
+      // host: jstring → JS string; metoda jest INSTANCYJNA, więc trafia tu
+      // też self – zdefiniowane niżej z pełną sygnaturą (lib, self, host).
+      let host = hostRaw;
+      if (typeof host !== "string") {
+        try { host = await hostRaw?.toString?.(); } catch { /* jw */ }
+        if (typeof host !== "string") host = String(hostRaw ?? "");
       }
-    } catch { /* np. GitHub Pages – dalej DoH z przeglądarki */ }
-    // 2) DNS-over-HTTPS z przeglądarki (działa też bez backendu)
-    for (const url of [
-      `https://dns.google/resolve?name=${enc}&type=A`,
-      `https://cloudflare-dns.com/dns-query?name=${enc}&type=A`,
-    ]) {
+      host = host.trim();
+      // szybkie ścieżki bez sieci: IP / localhost
+      if (IPV4.test(host)) return javaStrings(lib, [host]);
+      const low = host.toLowerCase();
+      if (low === "localhost" || low.endsWith(".localhost") || low === "0.0.0.0") {
+        return javaStrings(lib, ["127.0.0.1"]);
+      }
+      // 1) własny serwer (node server.js /resolve)
       try {
-        const r = await fetch(url, { headers: { accept: "application/dns-json" } });
+        const r = await fetch(`/resolve?host=${encodeURIComponent(host)}`);
         if (r.ok) {
           const j = await r.json();
-          const addrs = (j.Answer || []).filter((a) => a.type === 1).map((a) => a.data);
-          if (addrs.length) return addrs;
+          if (j.addrs?.length) return javaStrings(lib, j.addrs);
         }
-      } catch { /* następny resolver */ }
+      } catch { /* statyka – dalej DoH z przeglądarki */ }
+      // 2) DNS-over-HTTPS (CORS *) – działa też bez backendu
+      for (const url of [
+        `https://dns.google/resolve?name=${encodeURIComponent(host)}&type=A`,
+        `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`,
+      ]) {
+        try {
+          const r = await fetch(url, { headers: { accept: "application/dns-json" } });
+          if (r.ok) {
+            const j = await r.json();
+            const addrs = (j.Answer || []).filter((a) => a.type === 1).map((a) => a.data);
+            if (addrs.length) return javaStrings(lib, addrs);
+          }
+        } catch { /* następny resolver */ }
+      }
+      // brak wyniku = UnknownHostException (Java łapie to sama)
+      await jthrow(lib, "java.net.UnknownHostException", host);
+    } catch (e) {
+      // surowy wyjątek JS zabija wątek natywny (thread stopped) – nigdy tego nie robimy;
+      // obiekt wyjątku Javy przepuszczamy, a JS-błąd tłumiemy wynikiem fallback
+      if (e && typeof e === "object" && !(e instanceof Error)) throw e;
+      console.warn("[net] lookup fallback:", e);
+      return javaStrings(lib, ["127.0.0.1"]);
     }
-    throw new Error("DNS: nie udało się rozwiązać " + host);
   };
   return {
     Java_java_net_InetAddress_init() {},
     Java_java_net_InetAddress_isIPv6Supported() { return false; },
-    Java_java_net_Inet4AddressImpl_lookupAllHostAddr(_lib, host) { return lookup(host); },
-    Java_java_net_Inet6AddressImpl_lookupAllHostAddr(_lib, host) { return lookup(host); },
-    Java_java_net_InetAddressImpl_lookupAllHostAddr(_lib, host) { return lookup(host); },
+    Java_java_net_Inet4AddressImpl_lookupAllHostAddr(lib, _self, host) { return lookup(lib, host); },
+    Java_java_net_Inet6AddressImpl_lookupAllHostAddr(lib, _self, host) { return lookup(lib, host); },
+    Java_java_net_InetAddressImpl_lookupAllHostAddr(lib, _self, host) { return lookup(lib, host); },
   };
 }
 
