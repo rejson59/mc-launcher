@@ -428,3 +428,26 @@ textarea.code { font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
   white-space: pre-wrap; word-break: break-word;
 }
 .crash-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+
+/* faza startu z żywym logiem – półprzezroczysta, karta na dole (gra widoczna) */
+.game-phase.tail {
+  align-items: flex-end; justify-content: center;
+  padding-bottom: 58px;
+  background: rgba(9, 11, 14, .28);
+}
+.game-phase.tail .phase-t, .game-phase.tail .phase-s { text-shadow: 0 1px 3px #000, 0 0 8px #000; }
+.phase-log {
+  width: min(760px, 94vw); max-height: 30vh; overflow: auto; margin: 10px 0 8px;
+  padding: 10px; background: rgba(10, 12, 9, .92); color: #b9e6ad;
+  border: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 11px; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word;
+}
+.phase-actions { display: flex; gap: 8px; justify-content: center; }
+.phase-actions button {
+  font: 12px/1 var(--font); color: var(--text);
+  background: rgba(42, 44, 32, .95); border: 1px solid var(--line-soft);
+  padding: 8px 16px; cursor: pointer;
+}
+.phase-actions button:hover { background: var(--accent-dk); }

@@ -11,7 +11,7 @@
  * Hook w js/game.js (cjFetch) zostaje jako pas bezpieczeństwa dla form
  * ścieżek, które trafiają do okna.
  */
-const SHELL = "mcl-shell-v7";
+const SHELL = "mcl-shell-v8";
 const GAME_DATA = "mcl-data-v1";
 
 self.addEventListener("install", (e) => {
@@ -44,7 +44,9 @@ self.addEventListener("message", (e) => {
 
 /* ---------------- dane gry: /app/ (virtual) → Cache Storage + Range ------------- */
 
-const gameBuffers = new Map(); // ścieżka → ArrayBuffer (unikat Range bez czytania całości co raz)
+const gameBuffers = new Map(); // ścieżka → ArrayBuffer (Range bez czytania całości co raz)
+const GAME_BUF_BUDGET = 16 * 1048576; // Android: ograniczyć RAM (bufory jarów)
+let gameBufBytes = 0;
 
 /** Normalizacja dowolnej formy żądania do klucza z instalacji: /app/data/vanilla/… */
 function gameKey(pathname) {
@@ -88,8 +90,13 @@ async function serveGame(req, url) {
   let buf = gameBuffers.get(key);
   if (!buf) {
     buf = await hit.arrayBuffer();
-    if (gameBuffers.size > 12) gameBuffers.clear();
     gameBuffers.set(key, buf);
+    gameBufBytes += buf.byteLength;
+    while (gameBufBytes > GAME_BUF_BUDGET && gameBuffers.size > 1) {
+      const k = gameBuffers.keys().next().value;
+      gameBufBytes -= gameBuffers.get(k).byteLength;
+      gameBuffers.delete(k);
+    }
   }
   if (req.method === "HEAD") {
     return new Response(null, { status: 200, headers: { "Content-Length": String(buf.byteLength), "Accept-Ranges": "bytes" } });

@@ -165,6 +165,17 @@ export function isPlaying() { return playing; }
 document.getElementById("hud-exit")?.addEventListener("click", () => {
   if (confirm("Zakończyć grę? (strona się przeładuje)")) exitGame();
 });
+(() => {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.id = "hud-log";
+  b.textContent = "Log";
+  b.addEventListener("click", () => {
+    if (!bootLog.length) { toast("Brak logu uruchomienia.", ""); return; }
+    showCrashDialog("Log uruchomienia", `${bootLog.length} wierszy`);
+  });
+  document.getElementById("hud-exit")?.before(b);
+})();
 function bindTouchPad() {
   const pad = document.getElementById("touch-pad");
   if (!pad || pad.dataset.bound) return;
@@ -200,7 +211,19 @@ function bootNote(text) {
     const line = `[+${Date.now() - launchT0}ms] ${s.length > 500 ? s.slice(0, 500) + " …" : s}`;
     bootLog.push(line);
     if (bootLog.length > BOOT_LOG_MAX) bootLog.splice(0, bootLog.length - BOOT_LOG_MAX);
+    lastBootAt = Date.now();
+    tailDirty = true;
+    persistBootLog();
   } catch { /* diagnostyka nigdy nie może przerwać gry */ }
+}
+
+let persistTimer = 0;
+function persistBootLog() {
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = 0;
+    try { sessionStorage.setItem("mcw.boot.v1", JSON.stringify(bootLog.slice(-160))); } catch { /* jw */ }
+  }, 500);
 }
 
 function fmtLogArg(v) {
@@ -263,12 +286,105 @@ function showCrashDialog(title, context) {
   document.body.appendChild(ov);
 }
 
+function copyLog(title) {
+  const txt = [title, navigator.userAgent, "", ...bootLog].join("\n");
+  return navigator.clipboard?.writeText(txt)
+    .then(() => toast("Log skopiowany – wklej go na czat.", "ok"))
+    .catch(() => toast("Schowek zabroniony – zaznacz tekst i kopiuj ręcznie.", "warn"));
+}
+
+/* Odzysk logu, gdy poprzednie uruchomienie padło bez okienka (OOM, crash karty). */
+try {
+  if (sessionStorage.getItem("mcw.booting") === "1") {
+    sessionStorage.removeItem("mcw.booting");
+    const saved = JSON.parse(sessionStorage.getItem("mcw.boot.v1") || "null");
+    if (Array.isArray(saved) && saved.length) {
+      bootLog.push(...saved.slice(-200));
+      if (bootLog.length > BOOT_LOG_MAX) bootLog.splice(0, bootLog.length - BOOT_LOG_MAX);
+      setTimeout(() => showCrashDialog("Poprzednie uruchomienie nie dokończyło się",
+        "log odzyskany po przeładowaniu strony"), 700);
+    }
+  }
+} catch { /* jw */ }
+
+/* ---------------- faza startu: karta z ŻYWYM logiem ---------------- */
+let tailOn = false;
+let launchPending = false;
+let lastBootAt = Date.now();
+let tailDirty = false;
+let lastTailText = "";
+let phaseSubBase = "";
+let cursorSeenAt = 0;
+let lastPreloadPct = -1;
+let phaseT = null, phaseS = null, phaseLogEl = null;
+
+function tailText() { return bootLog.slice(-14).join("\n"); }
+
 function phase(text, sub) {
-  if (phaseEl) {
-    phaseEl.innerHTML = text ? `<div class="phase-t">${text}</div>${sub ? `<div class="phase-s">${sub}</div>` : ""}` : "";
-    phaseEl.hidden = !text;
+  if (!phaseEl) return;
+  phaseSubBase = sub || "";
+  if (!text) {
+    phaseEl.hidden = true;
+    phaseEl.classList.remove("tail");
+    phaseEl.innerHTML = "";
+    phaseT = phaseS = phaseLogEl = null;
+    return;
+  }
+  phaseEl.hidden = false;
+  phaseEl.classList.toggle("tail", tailOn);
+  phaseEl.innerHTML = "";
+  phaseT = document.createElement("div");
+  phaseT.className = "phase-t";
+  phaseT.textContent = text;
+  phaseS = document.createElement("div");
+  phaseS.className = "phase-s";
+  phaseS.textContent = phaseSubBase;
+  phaseEl.append(phaseT, phaseS);
+  if (tailOn) {
+    phaseLogEl = document.createElement("pre");
+    phaseLogEl.className = "phase-log";
+    lastTailText = tailText();
+    phaseLogEl.textContent = lastTailText || "(czekam na wyjście JVM…)";
+    const row = document.createElement("div");
+    row.className = "phase-actions";
+    const hideBtn = document.createElement("button");
+    hideBtn.type = "button";
+    hideBtn.textContent = "Ukryj";
+    hideBtn.addEventListener("click", () => { tailOn = false; launchPending = false; phase(null); });
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.textContent = "Kopiuj log";
+    copyBtn.addEventListener("click", () => copyLog("Log uruchomienia"));
+    row.append(hideBtn, copyBtn);
+    phaseEl.append(phaseLogEl, row);
+  } else {
+    phaseLogEl = null;
   }
 }
+
+function tailHide() { tailOn = false; launchPending = false; phase(null); }
+
+/* Ticker: odświeża ogon logu, licznik sekund i sam chowa kartę, gdy gra
+ * wystartowała (cursor Javy albo \`ucichnięcie\` logu po postępach). */
+setInterval(() => {
+  if (!tailOn || !phaseLogEl) return;
+  tailDirty = false;
+  const t = tailText();
+  if (t !== lastTailText) {
+    lastTailText = t;
+    phaseLogEl.textContent = t || "(czekam na wyjście JVM…)";
+  }
+  if (phaseS && launchPending) {
+    const secs = Math.round((Date.now() - launchT0) / 1000);
+    phaseS.textContent = phaseSubBase + ` · ${secs} s`
+      + (secs >= 20 && !bootLog.length ? " – brak wyjścia; F12 → Console" : "");
+  }
+  if (!launchPending) return;
+  const now = Date.now();
+  if (cursorSeenAt) return tailHide(); // Java ustawia kursor = interfejs żyje
+  if (bootLog.length && now - launchT0 > 10000 && now - lastBootAt > 6000) return tailHide(); // postęp i cisza
+  if (now - launchT0 > 90000 && now - lastBootAt > 2000) return tailHide(); // dłużej niż90 s
+}, 300);
 
 function applyScale(pct) {
   const target = document.getElementById("game-wrap") || wrap;
@@ -381,6 +497,12 @@ export async function launchInstance(inst) {
   document.getElementById("hud-name") && (document.getElementById("hud-name").textContent = id);
   hudBufor && (hudBufor.textContent = "");
   startHud();
+  tailOn = true;
+  launchPending = true;
+  lastBootAt = Date.now();
+  cursorSeenAt = 0;
+  lastPreloadPct = -1;
+  try { sessionStorage.setItem("mcw.booting", "1"); } catch { /* jw */ }
   phase("Przygotowanie…", id);
 
   let plan;
@@ -412,11 +534,21 @@ export async function launchInstance(inst) {
         libraries: { "libGL.so.1": "/vendor/lwjgl/gl4es.wasm" },
         enableX11: true,
         preloadResources: BASE_PRELOAD,
+        preloadProgress: (done, total) => {
+          if (!total) return;
+          const pct = Math.floor((done / total) * 100);
+          if (pct === lastPreloadPct) return;
+          lastPreloadPct = pct;
+          phase("Runtime CheerpJ…", `pliki runtime ${pct}% (${done}/${total})`);
+        },
         natives: socketNativesWrapped(),
       });
       inited = true;
       await window.cheerpjCreateDisplay(-1, -1, frameEl);
-      window.cheerpjDisplaySetCursorCallback?.((c) => { frameEl.style.cursor = c; });
+      window.cheerpjDisplaySetCursorCallback?.((c) => {
+        frameEl.style.cursor = c;
+        if (Date.now() - launchT0 > 5000) cursorSeenAt = Date.now();
+      });
     }
 
     phase("Start gry…", `${meta.mainClass || plan.mainClass} · ${args.length} arg.`);
@@ -429,9 +561,13 @@ export async function launchInstance(inst) {
     ].join(":");
 
     applyScale(resolveRenderScale());
-    phase(null);
+    phase("Uruchomianie gry…", "JVM wczytuje biblioteki i klienta – na telefonie potrafi zająć 0,5–1,5 min. Log rośnie poniżej; jeśli ucichnie, gra wystartowała – przycisk Ukryj.");
     const mainClass = plan.mainClass;
     const code = await window.cheerpjRunMain(mainClass, cp, ...args);
+    launchPending = false;
+    tailOn = false;
+    try { sessionStorage.removeItem("mcw.booting"); } catch { /* jw */ }
+    phase(null);
     toast(`Gra zakończyła się (kod ${code}).`, code === 0 ? "ok" : "warn");
     if (code !== 0) {
       showCrashDialog(`Gra zakończyła się (kod ${code})`,
@@ -439,6 +575,9 @@ export async function launchInstance(inst) {
     }
   } catch (e) {
     console.error("[launch]", e);
+    launchPending = false;
+    tailOn = false;
+    try { sessionStorage.removeItem("mcw.booting"); } catch { /* jw */ }
     toast("Start nieudany: " + e.message, "err");
     phase("Błąd startu", e.message);
     showCrashDialog("Start nieudany: " + e.message, `${id} · ${plan?.mainClass || ""}`);
@@ -454,6 +593,9 @@ function resolveRenderScale() {
 export function exitGame() {
   if (!playing) return;
   playing = false;
+  launchPending = false;
+  tailOn = false;
+  try { sessionStorage.removeItem("mcw.booting"); } catch { /* jw */ }
   cancelAnimationFrame(rafId);
   // CheerpJ nie pozwala „zatrzymać" JVM – czyścimy przez przeładowanie strony
   location.hash = "#/home";
