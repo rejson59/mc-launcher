@@ -229,7 +229,7 @@ function persistBootLog() {
 
 function fmtLogArg(v) {
   if (typeof v === "string") return v;
-  if (v instanceof Error) return v.stack || String(v);
+  if (v instanceof Error) return `${v.name}: ${v.message}\n${v.stack || ""}`; // Firefox: stack bez treści
   if (v && typeof v === "object") { try { return JSON.stringify(v); } catch { /* jw */ } }
   return String(v);
 }

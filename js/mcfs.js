@@ -36,8 +36,11 @@ function withTimeout(p, ms, label) {
   ]).finally(() => clearTimeout(timer));
 }
 
-// library-mode: naturalne prymitywy albo opakowania {value0} ze starych API.
-function truthy(v) { return v === true || v?.value0 === true; }
+// library-mode: boolean Javy przechodzi jako 1/0 (a stare API jako {value0}).
+function truthy(v) {
+  if (v === true || v === 1) return true;
+  return v?.value0 === true || v?.value0 === 1;
+}
 
 let libJava = null;
 async function javaLib() {
@@ -73,9 +76,9 @@ async function ensureDirs(dirs) {
   for (const d of dirs) {
     const f = await new File(d);
     const ok = await f.mkdirs();
-    const ex = await f.exists();
-    if (!truthy(ex)) throw new Error(`mkdirs nie utworzył katalogu ${d} (ok=${String(ok)})`);
-    if (truthy(ok)) created++;
+    if (truthy(ok)) { created++; continue; } // utworzony
+    const ex = await f.exists(); // 0 = istniał wcześniej albo realna awaria
+    if (!truthy(ex)) throw new Error(`mkdirs: ${d} (ok=${String(ok)}, exists=${String(ex)})`);
   }
   return created;
 }
@@ -88,8 +91,9 @@ async function javaCopyFromStr(dstPath, expected) {
   const FileOutputStream = await lib.java.io.FileOutputStream;
   const parent = dstPath.slice(0, dstPath.lastIndexOf("/")) || "/files";
   const df = await new File(parent);
-  if (!truthy(await df.mkdirs()) && !truthy(await df.exists())) {
-    throw new Error("mkdirs: " + parent);
+  const okM = await df.mkdirs();
+  if (!truthy(okM) && !truthy(await df.exists())) {
+    throw new Error(`mkdirs: ${parent} (ok=${String(okM)})`);
   }
   const fin = await new FileInputStream(STR_TMP);
   try {
@@ -171,6 +175,7 @@ export async function ensureGameFiles(id, meta, plan, { log, onProgress } = {}) 
   const dirs = new Set([MC_ROOT, `${MC_ROOT}/natives`, base]);
   for (const j of jobs) dirs.add(j.dst.slice(0, j.dst.lastIndexOf("/")) || MC_ROOT);
   try {
+    log?.(`katalogi: ${dirs.size} – mkdirs…`);
     const created = await withTimeout(ensureDirs([...dirs]), 60000, "mkdirs");
     log?.(`katalogi: ${dirs.size} (nowe: ${created})`);
   } catch (e) {
