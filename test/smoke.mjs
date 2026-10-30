@@ -111,6 +111,7 @@ const mojo = await import(path.join(root, "js/mojo.js"));
 check("AutoRAM: <1024 → 296", mojo.findBestRAMAllocation(768) === 296);
 check("AutoRAM: >=6144 → 2048", mojo.findBestRAMAllocation(8192) === 2048);
 check("skaler: słabe 1080p → 70%", mojo.findBestResolution(1080, false) === 70);
+check("skaler: telefon 1080p → 60%", mojo.findBestResolution(1080, false, 5, true) === 60);
 
 const mojang = await import(path.join(root, "js/mojang.js"));
 check("katalog: tylko ery ≤1.12.2 + beta/alfa",

@@ -507,7 +507,7 @@ export function buildArgs(plan, profile, verType) {
 export function buildOptionsPreset(prefs) {
   const dev = detectDevice();
   const rd = prefs.rd ?? (dev.powerful ? 6 : dev.mid ? 4 : 2);
-  const fps = prefs.maxFps ?? (dev.powerful ? 120 : 60);
+  const fps = prefs.maxFps ?? (dev.touch ? 30 : dev.powerful ? 120 : 60);
   const fancy = prefs.fancy ?? false;
   return [
     "ao:0", `renderDistance:${rd}`, "enableVsync:false", "guiScale:0",
