@@ -366,6 +366,12 @@ function phase(text, sub) {
 
 function tailHide() { tailOn = false; launchPending = false; phase(null); }
 
+/** CheerpJ potrafi odrzucać obietnice zwykłym stringiem – komunikat ma być czytelny. */
+function errMsg(e) {
+  if (typeof e === "string") return e;
+  return e?.message || String(e);
+}
+
 /* Ticker: odświeża ogon logu, licznik sekund i sam chowa kartę, gdy gra
  * wystartowała (cursor Javy albo \`ucichnięcie\` logu po postępach). */
 setInterval(() => {
@@ -592,9 +598,10 @@ export async function launchInstance(inst) {
     launchPending = false;
     tailOn = false;
     try { sessionStorage.removeItem("mcw.booting"); } catch { /* jw */ }
-    toast("Start nieudany: " + e.message, "err");
-    phase("Błąd startu", e.message);
-    showCrashDialog("Start nieudany: " + e.message, `${id} · ${plan?.mainClass || ""}`);
+    const msg = errMsg(e);
+    toast("Start nieudany: " + msg, "err");
+    phase("Błąd startu", msg);
+    showCrashDialog("Start nieudany: " + msg, `${id} · ${plan?.mainClass || ""}`);
   }
 }
 
