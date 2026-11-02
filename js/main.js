@@ -34,6 +34,16 @@ window.__MCL_BASE__ = location.pathname.replace(/[^/]*$/, "");
 
 /* ---------- Service Worker ---------- */
 
+/* Nowa wersja SW przejęła kontrolę (skipWaiting + claim): odśwież stronę
+ * RAZ, żeby nie klikać na starych plikach z cache – pierwsze wejście po
+ * deployu serwuje jeszcze stary shell, nowy dopiero instaluje się w tle. */
+navigator.serviceWorker?.addEventListener?.("controllerchange", () => {
+  if (isPlaying()) return; // nie przerywaj gry – nowe pliki przy następnej wizycie
+  if (window.__mclSwReloaded) return;
+  window.__mclSwReloaded = true;
+  location.reload();
+});
+
 async function registerSw() {
   if (!("serviceWorker" in navigator)) {
     toast("Przeglądarka bez Service Workera – tryb offline niedostępny.", "warn");
