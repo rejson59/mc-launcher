@@ -16,7 +16,7 @@ import { store } from "./store.js";
 
 const CJ_LOADER = "https://cjrtnc.leaningtech.com/4.3/loader.js";
 /** Znak firmowy w logu: „build brak” = strona na starych plikach z cache. */
-const BUILD = "b21";
+const BUILD = "b22";
 const BASE_PRELOAD = {
   "/lt/8/jre/lib/rt.jar": [0, 131072, 1310720, 1572864, 4456448, 4849664, 5111808, 5505024, 7995392, 8126464, 9699328, 9830400, 9961472, 11534336, 11665408, 12189696, 12320768, 12582912, 13238272, 13369344, 15073280, 15335424, 15466496, 15597568, 15990784, 16121856, 16252928, 16384000, 16777216, 16908288, 17039360, 17563648, 17694720, 17956864, 18087936, 18612224, 18743296, 18874368, 19005440, 19136512, 19398656, 19791872, 20054016, 20709376, 20840448, 21757952, 21889024, 26869760],
   "/lt/etc/users": [0, 131072],
@@ -204,6 +204,8 @@ bindTouchPad();
  * w okienku (użytkownik nie musi otwierać DevTools).                 */
 
 const bootLog = [];
+/** True, gdy w logu pojawił się zgon wątku głównego JVM (patrz watchdog niżej). */
+let mainThreadDied = false;
 const BOOT_LOG_MAX = 400;
 let consoleHooked = false;
 let launchT0 = Date.now();
@@ -214,6 +216,7 @@ function bootNote(text) {
     const line = `[+${Date.now() - launchT0}ms] ${s.length > 500 ? s.slice(0, 500) + " …" : s}`;
     bootLog.push(line);
     if (bootLog.length > BOOT_LOG_MAX) bootLog.splice(0, bootLog.length - BOOT_LOG_MAX);
+    if (!mainThreadDied && line.includes('Exception in thread "Thread-0"')) mainThreadDied = true;
     lastBootAt = Date.now();
     tailDirty = true;
     persistBootLog();
@@ -225,9 +228,18 @@ function persistBootLog() {
   if (persistTimer) return;
   persistTimer = setTimeout(() => {
     persistTimer = 0;
-    try { sessionStorage.setItem("mcw.boot.v1", JSON.stringify(bootLog.slice(-160))); } catch { /* jw */ }
+    persistBootLogNow();
   }, 500);
 }
+/** Zapis natychmiastowy – przy przeładowaniu/zamknięciu karty debounce nie zdąży. */
+function persistBootLogNow() {
+  if (!bootLog.length) return;
+  try { sessionStorage.setItem("mcw.boot.v1", JSON.stringify(bootLog.slice(-160))); } catch { /* jw */ }
+}
+window.addEventListener("pagehide", persistBootLogNow);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") persistBootLogNow();
+});
 
 function fmtLogArg(v) {
   if (typeof v === "string") return v;
@@ -391,6 +403,17 @@ setInterval(() => {
   }
   if (!launchPending || copying) return; // podczas kopiowania karta ma zostać
   const now = Date.now();
+  // JVM zabił wątek główny (Exception in thread "Thread-0"), a cheerpjRunMain
+  // milczy – pokaż kartę crasha z pełnym logiem zamiast wiecznego czekania.
+  if (now - lastBootAt > 4000 && mainThreadDied) {
+    launchPending = false;
+    tailOn = false;
+    try { sessionStorage.removeItem("mcw.booting"); } catch { /* jw */ }
+    phase(null);
+    toast("Gra zakończyła się (awaria JVM) – log w karcie.", "err");
+    showCrashDialog("Wątek główny JVM zgasł", "Exception in thread \"Thread-0\" – zobacz log poniżej.");
+    return;
+  }
   if (cursorSeenAt) return tailHide(); // Java ustawia kursor = interfejs żyje
   if (bootLog.length && now - launchT0 > 10000 && now - lastBootAt > 6000) return tailHide(); // postęp i cisza
   if (now - launchT0 > 90000 && now - lastBootAt > 2000) return tailHide(); // dłużej niż90 s
@@ -484,6 +507,7 @@ async function ensureLoader() {
 
 export async function launchInstance(inst) {
   bootLog.length = 0;
+  mainThreadDied = false;
   launchT0 = Date.now();
   hookConsoleOnce();
   const id = inst.id || inst.catalogId || inst.instId?.replace(/^i-/, "");
