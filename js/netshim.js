@@ -442,8 +442,25 @@ function nioNatives() {
 /** String[] po stronie Javy (LiveConnect niekoniecznie skonwertuje string[]). */
 async function javaStrings(lib, arr) {
   const ArrayCls = await lib.java.lang.reflect.Array;
-  const StringCls = await lib.java.lang.String;
-  const ja = await ArrayCls.newInstance(StringCls, arr.length);
+  if (!ArrayCls || typeof ArrayCls.newInstance !== "function") {
+    throw new Error("javaStrings: brak java.lang.reflect.Array");
+  }
+  // UWAGA: `lib.java.lang.String` w kontekście natywu bywa nie-do-końca
+  // klasą (Array.newInstance dostawał null → NPE w log4j init). Klasę
+  // bierzemy pewnie przez Class.forName, `.String` tylko jako zapas.
+  let StringCls = null;
+  try {
+    const Class = await lib.java.lang.Class;
+    StringCls = await Class.forName("java.lang.String");
+  } catch (e) {
+    console.warn("[net] forName(java.lang.String):", e);
+  }
+  if (!StringCls) {
+    try { StringCls = await lib.java.lang.String; } catch { /* jw */ }
+  }
+  if (!StringCls) throw new Error("javaStrings: brak klasy String");
+  const ja = await ArrayCls.newInstance(StringCls, arr.length | 0);
+  if (ja == null) throw new Error("javaStrings: null wynik Array.newInstance");
   for (let i = 0; i < arr.length; i++) ja[i] = String(arr[i]);
   return ja;
 }
@@ -452,27 +469,28 @@ function inetNatives() {
   const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
   const lookup = async (lib, hostRaw) => {
     act();
+    let host = "";
     try {
       // host: jstring → JS string; metoda jest INSTANCYJNA, więc trafia tu
       // też self – zdefiniowane niżej z pełną sygnaturą (lib, self, host).
-      let host = hostRaw;
+      host = hostRaw;
       if (typeof host !== "string") {
         try { host = await hostRaw?.toString?.(); } catch { /* jw */ }
         if (typeof host !== "string") host = String(hostRaw ?? "");
       }
       host = host.trim();
       // szybkie ścieżki bez sieci: IP / localhost
-      if (IPV4.test(host)) return javaStrings(lib, [host]);
+      if (IPV4.test(host)) return await javaStrings(lib, [host]);
       const low = host.toLowerCase();
       if (low === "localhost" || low.endsWith(".localhost") || low === "0.0.0.0") {
-        return javaStrings(lib, ["127.0.0.1"]);
+        return await javaStrings(lib, ["127.0.0.1"]);
       }
       // 1) własny serwer (node server.js /resolve)
       try {
         const r = await fetch(`/resolve?host=${encodeURIComponent(host)}`);
         if (r.ok) {
           const j = await r.json();
-          if (j.addrs?.length) return javaStrings(lib, j.addrs);
+          if (j.addrs?.length) return await javaStrings(lib, j.addrs);
         }
       } catch { /* statyka – dalej DoH z przeglądarki */ }
       // 2) DNS-over-HTTPS (CORS *) – działa też bez backendu
@@ -485,18 +503,24 @@ function inetNatives() {
           if (r.ok) {
             const j = await r.json();
             const addrs = (j.Answer || []).filter((a) => a.type === 1).map((a) => a.data);
-            if (addrs.length) return javaStrings(lib, addrs);
+            if (addrs.length) return await javaStrings(lib, addrs);
           }
         } catch { /* następny resolver */ }
       }
-      // brak wyniku = UnknownHostException (Java łapie to sama)
-      await jthrow(lib, "java.net.UnknownHostException", host);
     } catch (e) {
-      // surowy wyjątek JS zabija wątek natywny (thread stopped) – nigdy tego nie robimy;
-      // obiekt wyjątku Javy przepuszczamy, a JS-błąd tłumiemy wynikiem fallback
-      if (e && typeof e === "object" && !(e instanceof Error)) throw e;
-      console.warn("[net] lookup fallback:", e);
-      return javaStrings(lib, ["127.0.0.1"]);
+      // Własna awaria (np. NPE z javaStrings) albo cokolwiek obcego:
+      // NIGDY nie wypuszczamy tego z natywu (thread stopped / ExceptionInInitializerError).
+      console.warn("[net] lookup:", e);
+    }
+    // Serwis nazw w Javie może rzucać TYLKO UnknownHostException – log4j
+    // (NetUtils.getLocalHostname) i InetAddress same go łapią i jadą dalej.
+    try {
+      return await jthrow(lib, "java.net.UnknownHostException", host || "localhost");
+    } catch (e) {
+      if (e && typeof e === "object" && !(e instanceof Error)) throw e; // Java-owy UHE ✓
+      console.warn("[net] jthrow UHE:", e);
+      // ostateczność: cokolwiek zwracamy, byle nie death wątku
+      try { return await javaStrings(lib, ["127.0.0.1"]); } catch { return null; }
     }
   };
   return {
