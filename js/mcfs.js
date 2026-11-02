@@ -59,6 +59,24 @@ function withJavaLock(fn) {
   return run;
 }
 
+/* Guard CheerpJ potrafi odpalić też sporadycznie (wątek runtimeu akurat
+ * coś liczy) – powtórka po krótkim oddechu jest bezpieczna, bo mkdirs i
+ * kopiowanie są idempotentne. Nieudany strzał po `tries` = prawdziwy błąd. */
+async function javaCall(fn, tries = 3) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = typeof e === "string" ? e : e?.message || "";
+      if (i < tries - 1 && /Java code still running/.test(msg)) {
+        await new Promise((r) => setTimeout(r, 300 * (i + 1)));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 let libJava = null;
 function javaLib() {
   if (!libJava) {
@@ -66,7 +84,7 @@ function javaLib() {
       if (typeof window.cheerpjRunLibrary !== "function") {
         throw new Error("brak cheerpjRunLibrary (CheerpJ niezainicjowany?)");
       }
-      return await window.cheerpjRunLibrary("");
+      return await javaCall(() => window.cheerpjRunLibrary(""));
     })().catch((e) => { libJava = null; throw e; });
   }
   return libJava;
@@ -100,10 +118,10 @@ async function ensureDirs(dirs) {
     for (const d of sorted) {
       if (scheduled.some((s) => s.startsWith(d + "/"))) continue; // przodek już pokryty
       scheduled.push(d);
-      const f = await new File(d);
-      const ok = await f.mkdirs();
+      const f = await javaCall(() => new File(d));
+      const ok = await javaCall(() => f.mkdirs());
       if (truthy(ok)) { created++; continue; } // utworzony
-      const ex = await f.exists(); // 0 = istniał wcześniej albo realna awaria
+      const ex = await javaCall(() => f.exists()); // 0 = istniał wcześniej albo realna awaria
       if (!truthy(ex)) throw new Error(`mkdirs: ${d} (ok=${String(ok)}, exists=${String(ex)})`);
     }
     return created;
@@ -112,7 +130,7 @@ async function ensureDirs(dirs) {
 
 /** Fallback: kopiowanie /str → /files JAVĄ (czyste java.io) – pod zamkiem. */
 async function javaCopyFromStr(dstPath, expected, srcPath = STR_TMP) {
-  return withJavaLock(() => javaCopyLocked(dstPath, expected, srcPath));
+  return withJavaLock(() => javaCall(() => javaCopyLocked(dstPath, expected, srcPath), 2));
 }
 async function javaCopyLocked(dstPath, expected, srcPath) {
   const lib = await javaLib();
