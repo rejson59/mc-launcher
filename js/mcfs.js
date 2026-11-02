@@ -48,13 +48,26 @@ function truthy(v) {
   return v?.value0 === true || v?.value0 === 1;
 }
 
+/* Zamek trybu bibliotecznego: CheerpJ 4.3 przyrzuca guardem
+ * „Java code still running, check for a missing 'await'" przy RÓWNOLEGŁYCH
+ * wejściach library mode (8 workerów mkdirs + zdublowane cheerpjRunLibrary
+ * = strzał w 10 s). Jeden łańcuch wywołań na raz – tylko tak jest bezpiecznie. */
+let jLock = Promise.resolve();
+function withJavaLock(fn) {
+  const run = jLock.then(fn, fn);
+  jLock = run.then(() => {}, () => {});
+  return run;
+}
+
 let libJava = null;
-async function javaLib() {
+function javaLib() {
   if (!libJava) {
-    if (typeof window.cheerpjRunLibrary !== "function") {
-      throw new Error("brak cheerpjRunLibrary (CheerpJ niezainicjowany?)");
-    }
-    libJava = await window.cheerpjRunLibrary("");
+    libJava = (async () => {
+      if (typeof window.cheerpjRunLibrary !== "function") {
+        throw new Error("brak cheerpjRunLibrary (CheerpJ niezainicjowany?)");
+      }
+      return await window.cheerpjRunLibrary("");
+    })().catch((e) => { libJava = null; throw e; });
   }
   return libJava;
 }
@@ -74,31 +87,34 @@ function cjWrite(path, bytes) {
   });
 }
 
-/** Tworzy katalogi (java.io.File.mkdirs – rekurencyjnie, idempotentnie). */
+/** Tworzy katalogi (java.io.File.mkdirs – rekurencyjnie, idempotentnie).
+ *  Sekwencyjnie pod zamkiem library mode + dedup: głębszy katalog tworzy
+ *  przodków, więc niesiemy tylko najgłębsze ścieżki (mniej wywołań Javy). */
 async function ensureDirs(dirs) {
-  const lib = await javaLib();
-  const File = await lib.java.io.File;
-  const list = [...dirs];
-  let created = 0;
-  let cursor = 0;
-  const worker = async () => {
-    while (true) {
-      const i = cursor++;
-      if (i >= list.length) return;
-      const d = list[i];
+  return withJavaLock(async () => {
+    const lib = await javaLib();
+    const File = await lib.java.io.File;
+    const sorted = [...new Set(dirs)].sort((a, b) => b.length - a.length);
+    const scheduled = [];
+    let created = 0;
+    for (const d of sorted) {
+      if (scheduled.some((s) => s.startsWith(d + "/"))) continue; // przodek już pokryty
+      scheduled.push(d);
       const f = await new File(d);
       const ok = await f.mkdirs();
       if (truthy(ok)) { created++; continue; } // utworzony
       const ex = await f.exists(); // 0 = istniał wcześniej albo realna awaria
       if (!truthy(ex)) throw new Error(`mkdirs: ${d} (ok=${String(ok)}, exists=${String(ex)})`);
     }
-  };
-  await Promise.all(Array.from({ length: 8 }, worker));
-  return created;
+    return created;
+  });
 }
 
-/** Fallback: kopiowanie /str → /files JAVĄ (czyste java.io). */
+/** Fallback: kopiowanie /str → /files JAVĄ (czyste java.io) – pod zamkiem. */
 async function javaCopyFromStr(dstPath, expected, srcPath = STR_TMP) {
+  return withJavaLock(() => javaCopyLocked(dstPath, expected, srcPath));
+}
+async function javaCopyLocked(dstPath, expected, srcPath) {
   const lib = await javaLib();
   const File = await lib.java.io.File;
   const FileInputStream = await lib.java.io.FileInputStream;
