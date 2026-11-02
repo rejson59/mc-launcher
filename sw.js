@@ -11,7 +11,7 @@
  * Hook w js/game.js (cjFetch) zostaje jako pas bezpieczeństwa dla form
  * ścieżek, które trafiają do okna.
  */
-const SHELL = "mcl-shell-v13";
+const SHELL = "mcl-shell-v14";
 const GAME_DATA = "mcl-data-v1";
 const CJRT = "mcl-cjrt-v43"; // runtime CheerpJ (https://cjrtnc.leaningtech.com/4.3/…)
 
