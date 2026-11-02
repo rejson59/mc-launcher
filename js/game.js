@@ -16,7 +16,7 @@ import { store } from "./store.js";
 
 const CJ_LOADER = "https://cjrtnc.leaningtech.com/4.3/loader.js";
 /** Znak firmowy w logu: „build brak” = strona na starych plikach z cache. */
-const BUILD = "b20";
+const BUILD = "b21";
 const BASE_PRELOAD = {
   "/lt/8/jre/lib/rt.jar": [0, 131072, 1310720, 1572864, 4456448, 4849664, 5111808, 5505024, 7995392, 8126464, 9699328, 9830400, 9961472, 11534336, 11665408, 12189696, 12320768, 12582912, 13238272, 13369344, 15073280, 15335424, 15466496, 15597568, 15990784, 16121856, 16252928, 16384000, 16777216, 16908288, 17039360, 17563648, 17694720, 17956864, 18087936, 18612224, 18743296, 18874368, 19005440, 19136512, 19398656, 19791872, 20054016, 20709376, 20840448, 21757952, 21889024, 26869760],
   "/lt/etc/users": [0, 131072],
@@ -539,10 +539,13 @@ export async function launchInstance(inst) {
         version: plan.javaMajor >= 17 ? 17 : 8,
         status: "none",
         javaProperties: [
-          `java.library.path=${MC_ROOT}/natives/`,
+          // loadLibrary("lwjgl") szuka na ścieżce pliku lwjgl.js (docs CheerpJ),
+          // a ten musi dać się POBRAĆ – /app (HTTP względem bazy strony), nie
+          // /files (IDB). Oba originy mają vendor/lwjgl w repo.
+          "java.library.path=/app/vendor/lwjgl/",
           "sun.java2d.opengl=false",
         ],
-        libraries: { "libGL.so.1": `${MC_ROOT}/natives/gl4es.wasm` },
+        libraries: { "libGL.so.1": "/app/vendor/lwjgl/gl4es.wasm" },
         enableX11: true,
         preloadResources: BASE_PRELOAD,
         preloadProgress: (done, total) => {

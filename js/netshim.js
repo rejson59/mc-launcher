@@ -458,33 +458,48 @@ function ipv4Bytes(s) {
  *  u Javy → AIOOBE na [0] w getLocalHost. Budujemy InetAddress[] przez
  *  InetAddress.getByAddress(host, byte[]) – czysto lokalnie, zero DNS. */
 async function javaInetAddrs(lib, queriedHost, ips) {
-  const ArrayCls = await lib.java.lang.reflect.Array;
-  if (!ArrayCls || typeof ArrayCls.newInstance !== "function") {
-    throw new Error("inetAddrs: brak java.lang.reflect.Array");
+  let step = "start";
+  try {
+    step = "reflect.Array";
+    const ArrayCls = await lib.java.lang.reflect.Array;
+    if (!ArrayCls || typeof ArrayCls.newInstance !== "function") {
+      throw new Error("brak java.lang.reflect.Array");
+    }
+    step = "InetAddress";
+    let InetCls = null;
+    try { InetCls = await lib.java.net.InetAddress; } catch { /* jw */ }
+    if (!InetCls || typeof InetCls.getByAddress !== "function") {
+      const Class = await lib.java.lang.Class;
+      InetCls = await Class.forName("java.net.InetAddress");
+    }
+    step = "Byte.TYPE";
+    const Byte = await lib.java.lang.Byte;
+    const ByteCls = await Byte.TYPE; // byte.class – udokumentowany wzorzec library mode
+    step = "filtr";
+    const kept = [];
+    for (const s of ips || []) {
+      const b = ipv4Bytes(s);
+      if (b) kept.push(b);
+    }
+    if (!kept.length) throw new Error("brak poprawnych adresów IPv4");
+    step = "newInstance[]";
+    const arr = await ArrayCls.newInstance(InetCls, kept.length);
+    if (arr == null) throw new Error("null wynik Array.newInstance");
+    const name = String(queriedHost || "localhost");
+    for (let i = 0; i < kept.length; i++) {
+      step = `byte[${i}]`;
+      const jb = await ArrayCls.newInstance(ByteCls, 4);
+      for (let j = 0; j < 4; j++) jb[j] = kept[i][j] << 24 >> 24; // → zakres byte
+      step = `getByAddress[${i}]`;
+      arr[i] = await InetCls.getByAddress(name, jb);
+    }
+    step = "return";
+    return arr;
+  } catch (e) {
+    const m = typeof e === "string" ? e
+      : (e && (e.message || e.name || (typeof e.toString === "function" ? e.toString() : null))) || String(e);
+    throw new Error(`inetAddrs@${step}: ${m}`);
   }
-  let InetCls = null;
-  try { InetCls = await lib.java.net.InetAddress; } catch { /* jw */ }
-  if (!InetCls || typeof InetCls.getByAddress !== "function") {
-    const Class = await lib.java.lang.Class;
-    InetCls = await Class.forName("java.net.InetAddress");
-  }
-  const Byte = await lib.java.lang.Byte;
-  const ByteCls = await Byte.TYPE; // byte.class – udokumentowany wzorzec library mode
-  const kept = [];
-  for (const s of ips || []) {
-    const b = ipv4Bytes(s);
-    if (b) kept.push(b);
-  }
-  if (!kept.length) throw new Error("inetAddrs: brak poprawnych adresów IPv4");
-  const arr = await ArrayCls.newInstance(InetCls, kept.length);
-  if (arr == null) throw new Error("inetAddrs: null wynik Array.newInstance");
-  const name = String(queriedHost || "localhost");
-  for (let i = 0; i < kept.length; i++) {
-    const jb = await ArrayCls.newInstance(ByteCls, 4);
-    for (let j = 0; j < 4; j++) jb[j] = kept[i][j] << 24 >> 24; // → zakres byte (-128..127)
-    arr[i] = await InetCls.getByAddress(name, jb);
-  }
-  return arr;
 }
 
 function inetNatives() {
