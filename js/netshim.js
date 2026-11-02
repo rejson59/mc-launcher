@@ -440,29 +440,51 @@ function nioNatives() {
 /* ---------------- natives: DNS ---------------- */
 
 /** String[] po stronie Javy (LiveConnect niekoniecznie skonwertuje string[]). */
-async function javaStrings(lib, arr) {
+function ipv4Bytes(s) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(s).trim());
+  if (!m) return null;
+  const b = [];
+  for (let i = 1; i <= 4; i++) {
+    const x = Number(m[i]);
+    if (x > 255) return null;
+    b.push(x);
+  }
+  return b;
+}
+
+/** NATYW Inet4AddressImpl.lookupAllHostAddr ma sygnaturę
+ *  `InetAddress[] lookupAllHostAddr(String)` (OpenJDK8u, nie String[]!).
+ *  Zwracanie String[] = „Invalid type conversion attempted" + pusta tablica
+ *  u Javy → AIOOBE na [0] w getLocalHost. Budujemy InetAddress[] przez
+ *  InetAddress.getByAddress(host, byte[]) – czysto lokalnie, zero DNS. */
+async function javaInetAddrs(lib, queriedHost, ips) {
   const ArrayCls = await lib.java.lang.reflect.Array;
   if (!ArrayCls || typeof ArrayCls.newInstance !== "function") {
-    throw new Error("javaStrings: brak java.lang.reflect.Array");
+    throw new Error("inetAddrs: brak java.lang.reflect.Array");
   }
-  // UWAGA: `lib.java.lang.String` w kontekście natywu bywa nie-do-końca
-  // klasą (Array.newInstance dostawał null → NPE w log4j init). Klasę
-  // bierzemy pewnie przez Class.forName, `.String` tylko jako zapas.
-  let StringCls = null;
-  try {
+  let InetCls = null;
+  try { InetCls = await lib.java.net.InetAddress; } catch { /* jw */ }
+  if (!InetCls || typeof InetCls.getByAddress !== "function") {
     const Class = await lib.java.lang.Class;
-    StringCls = await Class.forName("java.lang.String");
-  } catch (e) {
-    console.warn("[net] forName(java.lang.String):", e);
+    InetCls = await Class.forName("java.net.InetAddress");
   }
-  if (!StringCls) {
-    try { StringCls = await lib.java.lang.String; } catch { /* jw */ }
+  const Byte = await lib.java.lang.Byte;
+  const ByteCls = await Byte.TYPE; // byte.class – udokumentowany wzorzec library mode
+  const kept = [];
+  for (const s of ips || []) {
+    const b = ipv4Bytes(s);
+    if (b) kept.push(b);
   }
-  if (!StringCls) throw new Error("javaStrings: brak klasy String");
-  const ja = await ArrayCls.newInstance(StringCls, arr.length | 0);
-  if (ja == null) throw new Error("javaStrings: null wynik Array.newInstance");
-  for (let i = 0; i < arr.length; i++) ja[i] = String(arr[i]);
-  return ja;
+  if (!kept.length) throw new Error("inetAddrs: brak poprawnych adresów IPv4");
+  const arr = await ArrayCls.newInstance(InetCls, kept.length);
+  if (arr == null) throw new Error("inetAddrs: null wynik Array.newInstance");
+  const name = String(queriedHost || "localhost");
+  for (let i = 0; i < kept.length; i++) {
+    const jb = await ArrayCls.newInstance(ByteCls, 4);
+    for (let j = 0; j < 4; j++) jb[j] = kept[i][j] << 24 >> 24; // → zakres byte (-128..127)
+    arr[i] = await InetCls.getByAddress(name, jb);
+  }
+  return arr;
 }
 
 function inetNatives() {
@@ -480,17 +502,17 @@ function inetNatives() {
       }
       host = host.trim();
       // szybkie ścieżki bez sieci: IP / localhost
-      if (IPV4.test(host)) return await javaStrings(lib, [host]);
+      if (IPV4.test(host)) return await javaInetAddrs(lib, host, [host]);
       const low = host.toLowerCase();
       if (low === "localhost" || low.endsWith(".localhost") || low === "0.0.0.0") {
-        return await javaStrings(lib, ["127.0.0.1"]);
+        return await javaInetAddrs(lib, host, ["127.0.0.1"]);
       }
       // 1) własny serwer (node server.js /resolve)
       try {
         const r = await fetch(`/resolve?host=${encodeURIComponent(host)}`);
         if (r.ok) {
           const j = await r.json();
-          if (j.addrs?.length) return await javaStrings(lib, j.addrs);
+          if (j.addrs?.length) return await javaInetAddrs(lib, host, j.addrs);
         }
       } catch { /* statyka – dalej DoH z przeglądarki */ }
       // 2) DNS-over-HTTPS (CORS *) – działa też bez backendu
@@ -503,12 +525,12 @@ function inetNatives() {
           if (r.ok) {
             const j = await r.json();
             const addrs = (j.Answer || []).filter((a) => a.type === 1).map((a) => a.data);
-            if (addrs.length) return await javaStrings(lib, addrs);
+            if (addrs.length) return await javaInetAddrs(lib, host, addrs);
           }
         } catch { /* następny resolver */ }
       }
     } catch (e) {
-      // Własna awaria (np. NPE z javaStrings) albo cokolwiek obcego:
+      // Własna awaria (np. błąd budowania InetAddress[]) albo cokolwiek obcego:
       // NIGDY nie wypuszczamy tego z natywu (thread stopped / ExceptionInInitializerError).
       console.warn("[net] lookup:", e);
     }
@@ -520,7 +542,7 @@ function inetNatives() {
       if (e && typeof e === "object" && !(e instanceof Error)) throw e; // Java-owy UHE ✓
       console.warn("[net] jthrow UHE:", e);
       // ostateczność: cokolwiek zwracamy, byle nie death wątku
-      try { return await javaStrings(lib, ["127.0.0.1"]); } catch { return null; }
+      try { return await javaInetAddrs(lib, host || "localhost", ["127.0.0.1"]); } catch { return null; }
     }
   };
   return {
